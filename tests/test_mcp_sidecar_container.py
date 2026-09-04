@@ -14,7 +14,7 @@ from docker_sandbox.models import (
     HAProxyConfiguration,
     NetworkGatewayProfile,
 )
-from docker_sandbox.profiles import MINIMAL_PROFILE_NAME, get_docker_profile
+from docker_sandbox.profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_container import (
     _build_code_sidecar_cleanup_commands,
     _build_code_sidecar_container_name,
@@ -84,7 +84,7 @@ def test_mcp_sidecar_container_name_is_created_for_agent_network_runs() -> None:
 
 def test_mcp_sidecar_container_name_is_omitted_without_network() -> None:
     """Verify no-network runs do not get an MCP sidecar container."""
-    configuration = _create_minimal_configuration()
+    configuration = _create_locked_down_configuration()
 
     container_name = _build_mcp_sidecar_container_name(
         configuration,
@@ -108,7 +108,7 @@ def test_jina_reader_container_name_is_created_for_agent_network_runs() -> None:
 
 def test_jina_reader_container_name_is_omitted_without_network() -> None:
     """Verify no-network runs do not get a Jina Reader container."""
-    configuration = _create_minimal_configuration()
+    configuration = _create_locked_down_configuration()
 
     container_name = _build_jina_reader_container_name(
         configuration,
@@ -1156,7 +1156,7 @@ def test_agent_environment_omits_database_settings_with_haproxy() -> None:
 
 def test_agent_environment_omits_mcp_sidecar_url_without_network() -> None:
     """Verify no-network agent containers do not receive MCP sidecar settings."""
-    configuration = _create_minimal_configuration()
+    configuration = _create_locked_down_configuration()
 
     environment = _build_container_environment(configuration, {})
 
@@ -1719,7 +1719,9 @@ def test_wait_for_jina_reader_ready_persists_two_phase_results(
         command[:5] == ["docker", "run", "--rm", "--network", "sandbox-agent-net-1"]
         for command in calls
     )
-    assert all("sandbox-agent/sandbox-agent:minimal" in command for command in calls)
+    assert all(
+        "sandbox-agent/sandbox-agent:locked-down" in command for command in calls
+    )
 
 
 def test_ollama_sidecar_probe_scripts_target_service_and_models() -> None:
@@ -1817,7 +1819,9 @@ def test_wait_for_ollama_sidecar_ready_persists_model_results(
         command[:5] == ["docker", "run", "--rm", "--network", "sandbox-agent-net-1"]
         for command in calls
     )
-    assert all("sandbox-agent/sandbox-agent:minimal" in command for command in calls)
+    assert all(
+        "sandbox-agent/sandbox-agent:locked-down" in command for command in calls
+    )
 
 
 def test_wait_for_ollama_sidecar_ready_raises_when_models_missing(
@@ -1876,7 +1880,7 @@ def test_wait_for_ollama_sidecar_ready_raises_when_models_missing(
 
 
 def _create_network_configuration() -> DockerConfiguration:
-    profile = get_docker_profile(MINIMAL_PROFILE_NAME)
+    profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
     network_gateway = NetworkGatewayProfile(
         image_name="ubuntu/squid:latest",
         proxy_host="egress-gateway",
@@ -1946,13 +1950,13 @@ def _create_ollama_configuration(base_directory: Path) -> DockerConfiguration:
     )
 
 
-def _create_minimal_configuration() -> DockerConfiguration:
+def _create_locked_down_configuration() -> DockerConfiguration:
     return DockerConfiguration(
         base_directory=Path(".docker_sandbox"),
         dockerfile_path=Path("Dockerfile"),
         build_context=Path("."),
         guest_user="sandbox",
-        profile=get_docker_profile(MINIMAL_PROFILE_NAME),
+        profile=get_docker_profile(LOCKED_DOWN_PROFILE_NAME),
     )
 
 

@@ -20,7 +20,7 @@ from .models import (
     NetworkDnsPolicy,
     NetworkGatewayProfile,
 )
-from .profiles import MINIMAL_PROFILE_NAME, get_docker_profile
+from .profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 
 _IMAGE_REPOSITORY = "sandbox-agent/sandbox-agent"
 _OLLAMA_IMAGE_REPOSITORY = "sandbox-agent/ollama-sidecar"
@@ -349,18 +349,18 @@ def resolve_ollama_image_name(models: tuple[str, ...]) -> str:
 
 def resolve_profile(spec: SandboxSpec) -> DockerProfile:
     """Resolve a low-level Docker profile from a high-level sandbox spec."""
-    minimal_profile = get_docker_profile(MINIMAL_PROFILE_NAME)
+    base_profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
     network_gateway = None
     network_dns_policy = None
-    container_run_options = minimal_profile.container_run_options
-    environment = minimal_profile.environment
-    landlock_rules = minimal_profile.landlock_rules
-    pids_limit = minimal_profile.pids_limit
-    memory = minimal_profile.memory
-    memory_swap = minimal_profile.memory_swap
-    shm_size = minimal_profile.shm_size
-    ulimits = minimal_profile.ulimits
-    browser_surface = minimal_profile.browser_surface
+    container_run_options = base_profile.container_run_options
+    environment = base_profile.environment
+    landlock_rules = base_profile.landlock_rules
+    pids_limit = base_profile.pids_limit
+    memory = base_profile.memory
+    memory_swap = base_profile.memory_swap
+    shm_size = base_profile.shm_size
+    ulimits = base_profile.ulimits
+    browser_surface = base_profile.browser_surface
     if spec.has_capability(_NETWORK_CAPABILITY):
         network_gateway = NetworkGatewayProfile(
             image_name=_GATEWAY_IMAGE_NAME,
@@ -443,7 +443,7 @@ def resolve_profile(spec: SandboxSpec) -> DockerProfile:
         )
 
     return replace(
-        minimal_profile,
+        base_profile,
         name=f"sandbox-spec-{spec.image_tag}",
         description="Generated hardened profile for the sandbox spec.",
         image_name=spec.image_name,

@@ -1,4 +1,4 @@
-"""Remove Python packaging tools from a minimal sandbox image."""
+"""Remove Python packaging tools from a locked-down sandbox image."""
 
 from __future__ import annotations
 
