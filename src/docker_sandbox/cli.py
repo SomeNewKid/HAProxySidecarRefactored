@@ -11,7 +11,6 @@ from .models import (
     DockerConfiguration,
     DockerImageResult,
     DockerImageStatus,
-    DockerRunResult,
     SandboxRunTarget,
 )
 from .profiles import SUPPORTED_PROFILE_NAMES, get_docker_profile
@@ -55,7 +54,7 @@ def main(arguments: list[str] | None = None) -> int:
         run_result.remove_container()
         print(f"Removed disposable Docker container '{run_result.container_name}'.")
 
-    return _exit_code_from_run_result(run_result)
+    return run_result.exit_code
 
 
 def _parse_arguments(arguments: list[str] | None) -> argparse.Namespace:
@@ -210,14 +209,3 @@ def _print_image_result(result: DockerImageResult) -> None:
         return
 
     print(f"Docker sandbox base image build failed: {result.image_name}")
-
-
-def _exit_code_from_image_result(result: DockerImageResult) -> int:
-    if result.status in {DockerImageStatus.EXISTS, DockerImageStatus.CREATED}:
-        return 0
-
-    return 1
-
-
-def _exit_code_from_run_result(result: DockerRunResult) -> int:
-    return result.exit_code

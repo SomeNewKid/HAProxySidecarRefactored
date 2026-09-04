@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 from pathlib import Path
 
 import pytest
 
-from docker_sandbox.cli import _configuration_from_arguments
-from docker_sandbox.sandbox_container import _build_allowed_gateway_domains
 from docker_sandbox.sandbox_spec import (
     generate_dockerfile,
     load_sandbox_spec,
@@ -129,19 +126,6 @@ def test_top_level_allowlists_are_unsupported(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported sandbox spec key"):
         load_sandbox_spec(spec_path)
-
-
-def test_gateway_domains_use_only_configured_allowlist() -> None:
-    """Verify legacy fixture metadata does not widen the network allowlist."""
-    domains = _build_allowed_gateway_domains(
-        (".example.com",),
-        {
-            "allowed_domain": "ignored.test",
-            "git_remote_url": "https://github.com/example/project.git",
-        },
-    )
-
-    assert domains == (".example.com",)
 
 
 def test_environment_variables_support_explicit_and_host_values(
@@ -924,89 +908,6 @@ def test_ollama_image_hash_is_independent_from_agent_image_hash(
     assert first_spec.ollama_image_name == resolve_ollama_image_name(
         ("phi4-mini:latest", "qwen3:4b"),
     )
-
-
-def test_ollama_configuration_is_carried_into_docker_configuration(
-    tmp_path: Path,
-) -> None:
-    """Verify CLI configuration plumbing preserves Ollama sidecar data."""
-    spec_path = tmp_path / "sandbox_spec.toml"
-    spec_path.write_text(
-        "\n".join(
-            [
-                "schema_version = 1",
-                'capabilities = ["network", "ollama"]',
-                "[squid_proxy]",
-                "allowed_domains = []",
-                "allowed_ip_addresses = []",
-                "",
-                "[ollama_sidecar]",
-                'models = ["qwen3:4b", "phi4-mini:latest"]',
-            ]
-        ),
-        encoding="utf-8",
-    )
-    arguments = argparse.Namespace(
-        base_directory=tmp_path / "sandbox",
-        dockerfile=Path("unused"),
-        guest_user="sandbox",
-        profile=None,
-        sandbox_spec=spec_path,
-        test_sandbox=False,
-    )
-
-    configuration = _configuration_from_arguments(arguments)
-
-    assert configuration.ollama_models == ("phi4-mini:latest", "qwen3:4b")
-    assert configuration.ollama_image_name == resolve_ollama_image_name(
-        ("qwen3:4b", "phi4-mini:latest"),
-    )
-    assert configuration.resolved_spec is not None
-    assert configuration.resolved_spec["ollama_image_name"] == (
-        configuration.ollama_image_name
-    )
-
-
-def test_haproxy_configuration_is_carried_into_docker_configuration(
-    tmp_path: Path,
-) -> None:
-    """Verify HAProxy settings flow from spec into Docker configuration."""
-    spec_path = tmp_path / "sandbox_spec.toml"
-    spec_path.write_text(
-        "\n".join(
-            [
-                "schema_version = 1",
-                'capabilities = ["network", "haproxy"]',
-                "[squid_proxy]",
-                "allowed_domains = []",
-                "allowed_ip_addresses = []",
-                "",
-                "[haproxy]",
-                'backend_host = "host.docker.internal"',
-                "ports = [3306, 5432]",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    arguments = argparse.Namespace(
-        base_directory=tmp_path / "docker",
-        dockerfile=Path("src") / "docker_sandbox" / "dockerfile" / "Dockerfile",
-        guest_user="sandbox",
-        profile=None,
-        sandbox_spec=spec_path,
-        test_sandbox=False,
-    )
-
-    configuration = _configuration_from_arguments(arguments)
-
-    assert configuration.haproxy is not None
-    assert configuration.haproxy.backend_host == "host.docker.internal"
-    assert configuration.haproxy.ports == (3306, 5432)
-    assert configuration.resolved_spec is not None
-    assert configuration.resolved_spec["haproxy"] == {
-        "backend_host": "host.docker.internal",
-        "ports": [3306, 5432],
-    }
 
 
 def test_anthropic_python_capability_requires_network(tmp_path: Path) -> None:

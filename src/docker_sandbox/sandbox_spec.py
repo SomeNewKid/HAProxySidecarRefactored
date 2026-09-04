@@ -11,12 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent_container import hardening, image
-from .models import (
-    DockerProfile,
-    EnvironmentVariablePolicy,
-    HAProxyConfiguration,
-    LandlockPathRule,
-)
+from .models import DockerProfile, HAProxyConfiguration
 
 _IMAGE_REPOSITORY = "sandbox-agent/sandbox-agent"
 _OLLAMA_IMAGE_REPOSITORY = "sandbox-agent/ollama-sidecar"
@@ -345,12 +340,12 @@ def resolve_environment_variables(
         variables.append((variable.name, variable.value or ""))
 
     if (
-        _has_openai_family_capability(spec)
+        hardening.has_openai_family_capability(spec)
         and _OPENAI_API_KEY_ENVIRONMENT_VARIABLE not in variable_names
     ):
         variables.append((_OPENAI_API_KEY_ENVIRONMENT_VARIABLE, "[local]"))
     if (
-        _has_anthropic_family_capability(spec)
+        hardening.has_anthropic_family_capability(spec)
         and _ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE not in variable_names
     ):
         variables.append((_ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE, "[local]"))
@@ -363,9 +358,9 @@ def resolve_local_environment_variable_names(spec: SandboxSpec) -> frozenset[str
     names = {
         variable.name for variable in spec.environment_variables if variable.from_host
     }
-    if _has_openai_family_capability(spec):
+    if hardening.has_openai_family_capability(spec):
         names.add(_OPENAI_API_KEY_ENVIRONMENT_VARIABLE)
-    if _has_anthropic_family_capability(spec):
+    if hardening.has_anthropic_family_capability(spec):
         names.add(_ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE)
     return frozenset(names)
 
@@ -662,79 +657,3 @@ def _find_duplicate_ports(ports: tuple[int, ...]) -> tuple[int, ...]:
         seen.add(port)
 
     return tuple(duplicates)
-
-
-def _without_docker_network_none(options: tuple[str, ...]) -> tuple[str, ...]:
-    return hardening.without_docker_network_none(options)
-
-
-def _resolve_allowed_domains(spec: SandboxSpec) -> tuple[str, ...]:
-    return hardening.resolve_allowed_domains(
-        spec.allowed_domains,
-        include_openai=_has_openai_family_capability(spec),
-        include_anthropic=_has_anthropic_family_capability(spec),
-    )
-
-
-def _build_python_package_install_command(
-    spec: SandboxSpec,
-    include_probe_dependencies: bool = False,
-) -> str:
-    return image.build_python_package_install_command(
-        spec,
-        include_probe_dependencies=include_probe_dependencies,
-    )
-
-
-def _without_environment_policy(
-    policies: tuple[EnvironmentVariablePolicy, ...],
-    name: str,
-) -> tuple[EnvironmentVariablePolicy, ...]:
-    return hardening.without_environment_policy(policies, name)
-
-
-def _replace_environment_policy(
-    policies: tuple[EnvironmentVariablePolicy, ...],
-    name: str,
-    value: str,
-) -> tuple[EnvironmentVariablePolicy, ...]:
-    return hardening.replace_environment_policy(policies, name, value)
-
-
-def _append_environment_policy(
-    policies: tuple[EnvironmentVariablePolicy, ...],
-    name: str,
-    value: str,
-) -> tuple[EnvironmentVariablePolicy, ...]:
-    return hardening.append_environment_policy(policies, name, value)
-
-
-def _append_landlock_rule(
-    rules: tuple[LandlockPathRule, ...],
-    path: str,
-    access: str,
-) -> tuple[LandlockPathRule, ...]:
-    return hardening.append_landlock_rule(rules, path, access)
-
-
-def _replace_tmpfs_option(
-    options: tuple[str, ...],
-    mount_path: str,
-    replacement: str,
-) -> tuple[str, ...]:
-    return hardening.replace_tmpfs_option(options, mount_path, replacement)
-
-
-def _append_tmpfs_option(
-    options: tuple[str, ...],
-    tmpfs_option: str,
-) -> tuple[str, ...]:
-    return hardening.append_tmpfs_option(options, tmpfs_option)
-
-
-def _has_openai_family_capability(spec: SandboxSpec) -> bool:
-    return hardening.has_openai_family_capability(spec)
-
-
-def _has_anthropic_family_capability(spec: SandboxSpec) -> bool:
-    return hardening.has_anthropic_family_capability(spec)
