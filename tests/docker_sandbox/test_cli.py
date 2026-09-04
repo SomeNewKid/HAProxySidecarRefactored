@@ -32,9 +32,7 @@ def test_haproxy_configuration_is_carried_into_docker_configuration(
     )
     arguments = argparse.Namespace(
         base_directory=tmp_path / "docker",
-        dockerfile=Path("src") / "docker_sandbox" / "dockerfile" / "Dockerfile",
         guest_user="sandbox",
-        profile=None,
         sandbox_spec=spec_path,
         test_sandbox=False,
     )
@@ -73,9 +71,7 @@ def test_ollama_configuration_is_carried_into_docker_configuration(
     )
     arguments = argparse.Namespace(
         base_directory=tmp_path / "sandbox",
-        dockerfile=Path("unused"),
         guest_user="sandbox",
-        profile=None,
         sandbox_spec=spec_path,
         test_sandbox=False,
     )

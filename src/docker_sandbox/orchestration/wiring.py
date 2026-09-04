@@ -3,14 +3,8 @@
 from __future__ import annotations
 
 from docker_sandbox.models import DockerConfiguration, SandboxRunTarget
-from docker_sandbox.sidecars import (
-    code_execution,
-    haproxy,
-    jina_reader,
-    mcp,
-    ollama,
-    squid_gateway,
-)
+from docker_sandbox.orchestration import network
+from docker_sandbox.sidecars import haproxy, ollama, squid_gateway
 
 SQUID_GATEWAY = "squid_gateway"
 JINA_READER = "jina_reader"
@@ -18,6 +12,10 @@ CODE_EXECUTION = "code_execution"
 HAPROXY = "haproxy"
 OLLAMA = "ollama"
 MCP = "mcp"
+JINA_READER_CAPABILITY = "jina_reader"
+CODE_EXECUTION_CAPABILITY = "code_execution"
+HAPROXY_CAPABILITY = "haproxy"
+OLLAMA_CAPABILITY = "ollama"
 
 SIDECAR_START_ORDER = (
     SQUID_GATEWAY,
@@ -34,37 +32,25 @@ _MARIADB_PORT_ENVIRONMENT_VARIABLE = "MARIADB_PORT"
 _MARIADB_DATABASE_ENVIRONMENT_VARIABLE = "MARIADB_DATABASE"
 _MARIADB_CREDENTIALS_ENVIRONMENT_VARIABLE = "SANDBOX_TESTER_MARIADB_CREDENTIALS"
 _MARIADB_DATABASE_NAME = "agent_allowed"
-_MARIADB_DEFAULT_PORT = 3306
 
 
 def ordered_sidecars(configuration: DockerConfiguration) -> tuple[str, ...]:
     """Return configured sidecars in orchestration start order."""
-    return tuple(
-        sidecar_name
-        for sidecar_name in SIDECAR_START_ORDER
-        if should_start_sidecar(configuration, sidecar_name)
-    )
+    sidecars = []
+    if should_start_squid_gateway(configuration):
+        sidecars.append(SQUID_GATEWAY)
+    if should_start_jina_reader(configuration):
+        sidecars.append(JINA_READER)
+    if should_start_code_sidecar(configuration):
+        sidecars.append(CODE_EXECUTION)
+    if should_start_haproxy_sidecar(configuration):
+        sidecars.append(HAPROXY)
+    if should_start_ollama_sidecar(configuration):
+        sidecars.append(OLLAMA)
+    if should_start_mcp_sidecar(configuration):
+        sidecars.append(MCP)
 
-
-def should_start_sidecar(
-    configuration: DockerConfiguration,
-    sidecar_name: str,
-) -> bool:
-    """Return whether a named sidecar should be started for a run."""
-    if sidecar_name == SQUID_GATEWAY:
-        return should_start_squid_gateway(configuration)
-    if sidecar_name == JINA_READER:
-        return should_start_jina_reader(configuration)
-    if sidecar_name == CODE_EXECUTION:
-        return should_start_code_sidecar(configuration)
-    if sidecar_name == HAPROXY:
-        return should_start_haproxy_sidecar(configuration)
-    if sidecar_name == OLLAMA:
-        return should_start_ollama_sidecar(configuration)
-    if sidecar_name == MCP:
-        return should_start_mcp_sidecar(configuration)
-
-    raise ValueError(f"Unknown sidecar: {sidecar_name}")
+    return tuple(sidecars)
 
 
 def sidecar_dependencies(sidecar_name: str) -> tuple[str, ...]:
@@ -98,22 +84,22 @@ def should_start_mcp_sidecar(configuration: DockerConfiguration) -> bool:
 
 def should_start_jina_reader(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Jina Reader sidecar."""
-    return jina_reader.should_start(configuration)
+    return _should_start_capability_sidecar(configuration, JINA_READER_CAPABILITY)
 
 
 def should_start_code_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Code sidecar."""
-    return code_execution.should_start(configuration)
+    return _should_start_capability_sidecar(configuration, CODE_EXECUTION_CAPABILITY)
 
 
 def should_start_haproxy_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the HAProxy sidecar."""
-    return haproxy.should_start(configuration)
+    return _should_start_capability_sidecar(configuration, HAPROXY_CAPABILITY)
 
 
 def should_start_ollama_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Ollama sidecar."""
-    return ollama.should_start(configuration)
+    return _should_start_capability_sidecar(configuration, OLLAMA_CAPABILITY)
 
 
 def apply_agent_sidecar_environment(
@@ -131,9 +117,14 @@ def apply_agent_sidecar_environment(
             build_agent_gateway_no_proxy_hosts(configuration),
         )
     if should_start_mcp_sidecar(configuration):
-        mcp_sidecar_url = f"http://{mcp.alias()}:{mcp.port()}/mcp"
+        mcp_sidecar_url = network.http_url(
+            network.MCP_SIDECAR_ALIAS,
+            network.MCP_SIDECAR_PORT,
+            "/mcp",
+        )
         container_environment[_MCP_SIDECAR_URL_ENVIRONMENT_VARIABLE] = mcp_sidecar_url
-    ollama.apply_agent_environment(container_environment, configuration)
+    if should_start_ollama_sidecar(configuration):
+        ollama.apply_agent_environment(container_environment, configuration)
     remove_agent_database_environment(container_environment)
 
 
@@ -143,9 +134,9 @@ def build_agent_gateway_no_proxy_hosts(
     """Return gateway no-proxy hosts contributed by sidecar wiring."""
     hosts = []
     if should_start_mcp_sidecar(configuration):
-        hosts.append(mcp.alias())
+        hosts.append(network.MCP_SIDECAR_ALIAS)
     if should_start_ollama_sidecar(configuration):
-        hosts.append(ollama.alias())
+        hosts.append(network.OLLAMA_SIDECAR_ALIAS)
 
     return tuple(hosts)
 
@@ -154,11 +145,17 @@ def build_mcp_sidecar_no_proxy_hosts(
     configuration: DockerConfiguration,
 ) -> tuple[str, ...]:
     """Return MCP no-proxy hosts contributed by sidecar wiring."""
-    hosts = []
+    hosts = [
+        network.LOCALHOST,
+        network.LOOPBACK_IPV4_ADDRESS,
+        network.MCP_SIDECAR_ALIAS,
+        network.JINA_READER_ALIAS,
+        network.CODE_SIDECAR_ALIAS,
+    ]
     if should_start_haproxy_sidecar(configuration):
-        hosts.append(haproxy.alias())
+        hosts.append(network.HAPROXY_SIDECAR_ALIAS)
 
-    return mcp.build_no_proxy_hosts(tuple(hosts))
+    return tuple(hosts)
 
 
 def build_mcp_sidecar_database_environment_options(
@@ -172,7 +169,7 @@ def build_mcp_sidecar_database_environment_options(
     port = resolve_mariadb_proxy_port(haproxy_configuration.ports)
     return [
         "--env",
-        f"{_MARIADB_HOST_ENVIRONMENT_VARIABLE}={haproxy.alias()}",
+        f"{_MARIADB_HOST_ENVIRONMENT_VARIABLE}={network.HAPROXY_SIDECAR_ALIAS}",
         "--env",
         f"{_MARIADB_PORT_ENVIRONMENT_VARIABLE}={port}",
         "--env",
@@ -184,8 +181,8 @@ def build_mcp_sidecar_database_environment_options(
 
 def resolve_mariadb_proxy_port(ports: tuple[int, ...]) -> int:
     """Return the MariaDB port exposed through HAProxy."""
-    if _MARIADB_DEFAULT_PORT in ports:
-        return _MARIADB_DEFAULT_PORT
+    if network.MARIADB_DEFAULT_PORT in ports:
+        return network.MARIADB_DEFAULT_PORT
 
     return ports[0]
 
@@ -209,3 +206,14 @@ def database_environment_variable_names() -> set[str]:
         _MARIADB_DATABASE_ENVIRONMENT_VARIABLE,
         _MARIADB_CREDENTIALS_ENVIRONMENT_VARIABLE,
     }
+
+
+def _should_start_capability_sidecar(
+    configuration: DockerConfiguration,
+    capability: str,
+) -> bool:
+    return (
+        configuration.run_target == SandboxRunTarget.AGENT
+        and configuration.profile.network_gateway is not None
+        and capability in configuration.enabled_capabilities
+    )

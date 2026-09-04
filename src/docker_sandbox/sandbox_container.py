@@ -12,6 +12,7 @@ from .models import (
     DockerConfiguration,
     DockerRunResult,
     SeccompProfile,
+    SidecarRunRecord,
 )
 from .orchestration import wiring
 from .orchestration.artifacts import write_json_artifact
@@ -20,8 +21,14 @@ from .orchestration.types import RunContext
 from .sidecars import code_execution, haproxy, jina_reader, mcp, ollama, squid_gateway
 
 _DOCKER_EXECUTABLE = "docker"
-_CONTAINER_NAME_PREFIX = "sandbox-agent-run"
+_AGENT_CONTAINER_NAME_PREFIX = "sandbox-agent-run"
 _NETWORK_NAME_PREFIX = "sandbox-agent-net"
+_SQUID_GATEWAY_CONTAINER_NAME_PREFIX = "sandbox-agent-gateway"
+_MCP_SIDECAR_CONTAINER_NAME_PREFIX = "mcp-sidecar"
+_JINA_READER_CONTAINER_NAME_PREFIX = "jina-reader"
+_CODE_SIDECAR_CONTAINER_NAME_PREFIX = "code-sidecar"
+_HAPROXY_SIDECAR_CONTAINER_NAME_PREFIX = "haproxy-sidecar"
+_OLLAMA_SIDECAR_CONTAINER_NAME_PREFIX = "ollama-sidecar"
 
 
 def run_sandbox_container(
@@ -32,134 +39,124 @@ def run_sandbox_container(
     """Run Sandbox Agent in a disposable Docker container."""
     timestamp = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     run_context = _build_run_context(configuration, timestamp)
-    run_directory = run_context.run_directory
-    run_directory.mkdir(parents=True, exist_ok=True)
+    run_context.run_directory.mkdir(parents=True, exist_ok=True)
     _write_configuration_artifacts(configuration, run_context.run_directory)
-    container_name = run_context.container_name
-    network_name = run_context.network_name
-    gateway_container_name = run_context.gateway_container_name
-    mcp_sidecar_container_name = run_context.mcp_sidecar_container_name
-    jina_reader_container_name = run_context.jina_reader_container_name
-    code_sidecar_container_name = run_context.code_sidecar_container_name
-    haproxy_sidecar_container_name = run_context.haproxy_sidecar_container_name
-    ollama_sidecar_container_name = run_context.ollama_sidecar_container_name
-    remote_run_directory = run_context.remote_run_directory
-    allowed_directory = run_context.allowed_directory
-    denied_directory = run_context.denied_directory
-    _prepare_readonly_denied_directory(configuration, run_directory)
-    _prepare_readonly_persistence_directories(configuration, run_directory)
-    _prepare_denied_executable_stubs(configuration, run_directory)
-    _write_landlock_policy(configuration, run_directory)
-    _write_seccomp_profile(configuration, run_directory)
+    _prepare_readonly_denied_directory(configuration, run_context.run_directory)
+    _prepare_readonly_persistence_directories(configuration, run_context.run_directory)
+    _prepare_denied_executable_stubs(configuration, run_context.run_directory)
+    _write_landlock_policy(configuration, run_context.run_directory)
+    _write_seccomp_profile(configuration, run_context.run_directory)
     config_data = agent_run.build_config_data(
-        remote_run_directory,
-        allowed_directory,
-        denied_directory,
+        run_context.remote_run_directory,
+        run_context.allowed_directory,
+        run_context.denied_directory,
         configuration.guest_user,
         agent_run.get_container_ssh_agent_socket(configuration),
         configuration.profile.browser_debugging,
         configuration.profile.browser_surface,
     )
-    squid_gateway.write_configuration(configuration, run_directory, config_data)
-    _write_mcp_sidecar_exposure(configuration, run_directory)
-    haproxy.write_configuration(configuration, run_directory)
-    config_path = run_directory / "config.json"
+    if wiring.should_start_squid_gateway(configuration):
+        squid_gateway.write_configuration(
+            configuration, run_context.run_directory, config_data
+        )
+    _write_mcp_sidecar_exposure(configuration, run_context.run_directory)
+    if wiring.should_start_haproxy_sidecar(configuration):
+        haproxy.write_configuration(configuration, run_context.run_directory)
+    config_path = run_context.run_directory / "config.json"
     write_json_artifact(config_path, config_data)
     configured_environment_variables = dict(configuration.environment_variables)
     environment_variables = agent_run.resolve_environment_variables(
         configured_environment_variables,
     )
-    gateway_commands = None
     gateway_ip_address = None
-    jina_reader_commands = None
-    code_sidecar_commands = None
-    haproxy_sidecar_commands = None
-    ollama_sidecar_commands = None
-    mcp_sidecar_commands = None
-    for sidecar_name in wiring.ordered_sidecars(configuration):
+    sidecar_names = wiring.ordered_sidecars(configuration)
+    sidecar_container_names = _build_sidecar_container_names(run_context)
+    sidecar_start_commands: dict[str, list[list[str]] | None] = {}
+    for sidecar_name in sidecar_names:
         if sidecar_name == wiring.SQUID_GATEWAY:
-            gateway_commands, gateway_ip_address = squid_gateway.start_gateway(
+            commands, gateway_ip_address = squid_gateway.start_gateway(
                 configuration,
-                run_directory,
-                network_name,
-                gateway_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.gateway_container_name,
             )
+            sidecar_start_commands[sidecar_name] = commands
         elif sidecar_name == wiring.JINA_READER:
-            jina_reader_commands = jina_reader.start(
+            sidecar_start_commands[sidecar_name] = jina_reader.start(
                 configuration,
-                run_directory,
-                network_name,
-                jina_reader_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.jina_reader_container_name,
             )
             jina_reader.wait_until_ready(
                 configuration,
-                run_directory,
-                network_name,
-                jina_reader_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.jina_reader_container_name,
                 jina_reader._JINA_READER_READINESS_INTERVALS_SECONDS,
             )
         elif sidecar_name == wiring.CODE_EXECUTION:
-            code_sidecar_commands = code_execution.start(
+            sidecar_start_commands[sidecar_name] = code_execution.start(
                 configuration,
-                run_directory,
-                network_name,
-                code_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.code_sidecar_container_name,
             )
             code_execution.wait_until_ready(
                 configuration,
-                run_directory,
-                network_name,
-                code_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.code_sidecar_container_name,
                 code_execution._CODE_SIDECAR_READINESS_INTERVALS_SECONDS,
             )
         elif sidecar_name == wiring.HAPROXY:
-            haproxy_sidecar_commands = haproxy.start(
+            sidecar_start_commands[sidecar_name] = haproxy.start(
                 configuration,
-                run_directory,
-                network_name,
-                haproxy_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.haproxy_sidecar_container_name,
             )
             haproxy.wait_until_ready(
                 configuration,
-                run_directory,
-                haproxy_sidecar_container_name,
+                run_context.run_directory,
+                run_context.haproxy_sidecar_container_name,
                 haproxy._HAPROXY_READINESS_INTERVALS_SECONDS,
             )
         elif sidecar_name == wiring.OLLAMA:
-            ollama_sidecar_commands = ollama.start(
+            sidecar_start_commands[sidecar_name] = ollama.start(
                 configuration,
-                run_directory,
-                network_name,
-                ollama_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.ollama_sidecar_container_name,
             )
             ollama.wait_until_ready(
                 configuration,
-                run_directory,
-                network_name,
-                ollama_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.ollama_sidecar_container_name,
                 ollama._OLLAMA_READINESS_INTERVALS_SECONDS,
             )
         elif sidecar_name == wiring.MCP:
-            mcp_sidecar_commands = _start_mcp_sidecar(
+            sidecar_start_commands[sidecar_name] = _start_mcp_sidecar(
                 configuration,
-                run_directory,
-                network_name,
-                mcp_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.mcp_sidecar_container_name,
             )
             _wait_for_mcp_sidecar_ready(
                 configuration,
-                run_directory,
-                network_name,
-                mcp_sidecar_container_name,
+                run_context.run_directory,
+                run_context.network_name,
+                run_context.mcp_sidecar_container_name,
             )
     command = agent_run.build_docker_run_command(
         configuration=configuration,
-        run_directory=run_directory,
-        container_name=container_name,
-        network_name=network_name,
-        remote_run_directory=remote_run_directory,
-        allowed_directory=allowed_directory,
-        denied_directory=denied_directory,
+        run_directory=run_context.run_directory,
+        container_name=run_context.container_name,
+        network_name=run_context.network_name,
+        remote_run_directory=run_context.remote_run_directory,
+        allowed_directory=run_context.allowed_directory,
+        denied_directory=run_context.denied_directory,
         environment_variables=environment_variables,
         gateway_ip_address=gateway_ip_address,
         local_environment_variable_names=configuration.local_environment_variable_names,
@@ -167,80 +164,70 @@ def run_sandbox_container(
         serialize_evidence=serialize_evidence,
     )
     completed = agent_run.run_interactive_command(command)
-    _write_mcp_sidecar_logs(configuration, run_directory, mcp_sidecar_container_name)
-    jina_reader.write_logs(configuration, run_directory, jina_reader_container_name)
-    code_execution.write_logs(configuration, run_directory, code_sidecar_container_name)
+    _write_mcp_sidecar_logs(
+        configuration,
+        run_context.run_directory,
+        run_context.mcp_sidecar_container_name,
+    )
+    jina_reader.write_logs(
+        configuration,
+        run_context.run_directory,
+        run_context.jina_reader_container_name,
+    )
+    code_execution.write_logs(
+        configuration,
+        run_context.run_directory,
+        run_context.code_sidecar_container_name,
+    )
     haproxy.write_logs(
         configuration,
-        run_directory,
-        haproxy_sidecar_container_name,
+        run_context.run_directory,
+        run_context.haproxy_sidecar_container_name,
     )
     ollama.write_logs(
         configuration,
-        run_directory,
-        ollama_sidecar_container_name,
+        run_context.run_directory,
+        run_context.ollama_sidecar_container_name,
     )
-    squid_gateway.write_logs(configuration, run_directory, gateway_container_name)
-    _delete_readonly_denied_directory(configuration, run_directory)
-    _delete_readonly_persistence_directory(configuration, run_directory)
-    _delete_denied_executable_directory(configuration, run_directory)
-    remove_command = build_docker_remove_command(container_name, _DOCKER_EXECUTABLE)
-    gateway_cleanup_commands = squid_gateway.build_cleanup_commands(
+    squid_gateway.write_logs(
         configuration,
-        network_name,
-        gateway_container_name,
+        run_context.run_directory,
+        run_context.gateway_container_name,
     )
-    mcp_sidecar_cleanup_commands = _build_mcp_sidecar_cleanup_commands(
+    _delete_readonly_denied_directory(configuration, run_context.run_directory)
+    _delete_readonly_persistence_directory(configuration, run_context.run_directory)
+    _delete_denied_executable_directory(configuration, run_context.run_directory)
+    remove_command = build_docker_remove_command(
+        run_context.container_name,
+        _DOCKER_EXECUTABLE,
+    )
+    sidecar_cleanup_commands = _build_sidecar_cleanup_commands(
         configuration,
-        mcp_sidecar_container_name,
+        run_context.network_name,
+        run_context,
     )
-    jina_reader_cleanup_commands = jina_reader.build_cleanup_commands(
-        configuration,
-        jina_reader_container_name,
+    sidecars = _build_sidecar_run_records(
+        sidecar_names,
+        sidecar_container_names,
+        sidecar_start_commands,
+        sidecar_cleanup_commands,
     )
-    code_sidecar_cleanup_commands = code_execution.build_cleanup_commands(
-        configuration,
-        code_sidecar_container_name,
-    )
-    haproxy_sidecar_cleanup_commands = haproxy.build_cleanup_commands(
-        configuration,
-        haproxy_sidecar_container_name,
-    )
-    ollama_sidecar_cleanup_commands = ollama.build_cleanup_commands(
-        configuration,
-        ollama_sidecar_container_name,
-    )
+    cleanup_commands = _flatten_sidecar_cleanup_commands(sidecar_cleanup_commands)
 
     return DockerRunResult(
         image_name=configuration.profile.image_name,
         profile_name=configuration.profile.name,
-        container_name=container_name,
-        run_directory=run_directory,
+        container_name=run_context.container_name,
+        run_directory=run_context.run_directory,
         command=command,
         remove_command=remove_command,
         exit_code=completed.returncode,
         stdout=completed.stdout,
         stderr=completed.stderr,
-        network_name=network_name,
-        gateway_container_name=gateway_container_name,
+        network_name=run_context.network_name,
         gateway_ip_address=gateway_ip_address,
-        gateway_commands=gateway_commands,
-        gateway_cleanup_commands=gateway_cleanup_commands,
-        mcp_sidecar_container_name=mcp_sidecar_container_name,
-        mcp_sidecar_commands=mcp_sidecar_commands,
-        mcp_sidecar_cleanup_commands=mcp_sidecar_cleanup_commands,
-        jina_reader_container_name=jina_reader_container_name,
-        jina_reader_commands=jina_reader_commands,
-        jina_reader_cleanup_commands=jina_reader_cleanup_commands,
-        code_sidecar_container_name=code_sidecar_container_name,
-        code_sidecar_commands=code_sidecar_commands,
-        code_sidecar_cleanup_commands=code_sidecar_cleanup_commands,
-        haproxy_sidecar_container_name=haproxy_sidecar_container_name,
-        haproxy_sidecar_commands=haproxy_sidecar_commands,
-        haproxy_sidecar_cleanup_commands=haproxy_sidecar_cleanup_commands,
-        ollama_sidecar_container_name=ollama_sidecar_container_name,
-        ollama_sidecar_commands=ollama_sidecar_commands,
-        ollama_sidecar_cleanup_commands=ollama_sidecar_cleanup_commands,
+        sidecars=sidecars,
+        cleanup_commands=cleanup_commands,
     )
 
 
@@ -255,7 +242,7 @@ def _build_run_context(
         timestamp=timestamp,
         run_id=run_id,
         run_directory=run_directory,
-        container_name=f"{_CONTAINER_NAME_PREFIX}-{timestamp}",
+        container_name=_build_container_name(_AGENT_CONTAINER_NAME_PREFIX, timestamp),
         remote_run_directory=remote_run_directory,
         allowed_directory=agent_run.build_allowed_directory(
             configuration,
@@ -266,31 +253,122 @@ def _build_run_context(
             remote_run_directory,
         ),
         network_name=_build_network_name(configuration, timestamp),
-        gateway_container_name=squid_gateway.build_container_name(
-            configuration,
-            timestamp,
+        gateway_container_name=(
+            _build_container_name(_SQUID_GATEWAY_CONTAINER_NAME_PREFIX, timestamp)
+            if wiring.should_start_squid_gateway(configuration)
+            else None
         ),
         mcp_sidecar_container_name=_build_mcp_sidecar_container_name(
             configuration,
             timestamp,
         ),
-        jina_reader_container_name=jina_reader.build_container_name(
-            configuration,
-            timestamp,
+        jina_reader_container_name=(
+            _build_container_name(_JINA_READER_CONTAINER_NAME_PREFIX, timestamp)
+            if wiring.should_start_jina_reader(configuration)
+            else None
         ),
-        code_sidecar_container_name=code_execution.build_container_name(
-            configuration,
-            timestamp,
+        code_sidecar_container_name=(
+            _build_container_name(_CODE_SIDECAR_CONTAINER_NAME_PREFIX, timestamp)
+            if wiring.should_start_code_sidecar(configuration)
+            else None
         ),
-        haproxy_sidecar_container_name=haproxy.build_container_name(
-            configuration,
-            timestamp,
+        haproxy_sidecar_container_name=(
+            _build_container_name(_HAPROXY_SIDECAR_CONTAINER_NAME_PREFIX, timestamp)
+            if wiring.should_start_haproxy_sidecar(configuration)
+            else None
         ),
-        ollama_sidecar_container_name=ollama.build_container_name(
-            configuration,
-            timestamp,
+        ollama_sidecar_container_name=(
+            _build_container_name(_OLLAMA_SIDECAR_CONTAINER_NAME_PREFIX, timestamp)
+            if wiring.should_start_ollama_sidecar(configuration)
+            else None
         ),
     )
+
+
+def _build_sidecar_container_names(run_context: RunContext) -> dict[str, str | None]:
+    return {
+        wiring.SQUID_GATEWAY: run_context.gateway_container_name,
+        wiring.MCP: run_context.mcp_sidecar_container_name,
+        wiring.JINA_READER: run_context.jina_reader_container_name,
+        wiring.CODE_EXECUTION: run_context.code_sidecar_container_name,
+        wiring.HAPROXY: run_context.haproxy_sidecar_container_name,
+        wiring.OLLAMA: run_context.ollama_sidecar_container_name,
+    }
+
+
+def _build_sidecar_cleanup_commands(
+    configuration: DockerConfiguration,
+    network_name: str | None,
+    run_context: RunContext,
+) -> dict[str, list[list[str]] | None]:
+    return {
+        wiring.MCP: _build_mcp_sidecar_cleanup_commands(
+            configuration,
+            run_context.mcp_sidecar_container_name,
+        ),
+        wiring.JINA_READER: jina_reader.build_cleanup_commands(
+            configuration,
+            run_context.jina_reader_container_name,
+        ),
+        wiring.CODE_EXECUTION: code_execution.build_cleanup_commands(
+            configuration,
+            run_context.code_sidecar_container_name,
+        ),
+        wiring.HAPROXY: haproxy.build_cleanup_commands(
+            configuration,
+            run_context.haproxy_sidecar_container_name,
+        ),
+        wiring.OLLAMA: ollama.build_cleanup_commands(
+            configuration,
+            run_context.ollama_sidecar_container_name,
+        ),
+        wiring.SQUID_GATEWAY: squid_gateway.build_cleanup_commands(
+            configuration,
+            network_name,
+            run_context.gateway_container_name,
+        ),
+    }
+
+
+def _build_sidecar_run_records(
+    sidecar_names: tuple[str, ...],
+    sidecar_container_names: dict[str, str | None],
+    sidecar_start_commands: dict[str, list[list[str]] | None],
+    sidecar_cleanup_commands: dict[str, list[list[str]] | None],
+) -> tuple[SidecarRunRecord, ...]:
+    records = []
+    for sidecar_name in sidecar_names:
+        start_commands = sidecar_start_commands.get(sidecar_name) or []
+        cleanup_commands = sidecar_cleanup_commands.get(sidecar_name) or []
+        records.append(
+            SidecarRunRecord(
+                name=sidecar_name,
+                container_name=sidecar_container_names[sidecar_name],
+                start_commands=tuple(start_commands),
+                cleanup_commands=tuple(cleanup_commands),
+            )
+        )
+
+    return tuple(records)
+
+
+def _flatten_sidecar_cleanup_commands(
+    sidecar_cleanup_commands: dict[str, list[list[str]] | None],
+) -> tuple[list[str], ...]:
+    commands = []
+    for sidecar_name in (
+        wiring.MCP,
+        wiring.JINA_READER,
+        wiring.CODE_EXECUTION,
+        wiring.HAPROXY,
+        wiring.OLLAMA,
+        wiring.SQUID_GATEWAY,
+    ):
+        cleanup_commands = sidecar_cleanup_commands.get(sidecar_name)
+        if cleanup_commands is not None:
+            commands.extend(cleanup_commands)
+
+    return tuple(commands)
 
 
 def _write_configuration_artifacts(
@@ -327,7 +405,11 @@ def _build_mcp_sidecar_container_name(
     if not wiring.should_start_mcp_sidecar(configuration):
         return None
 
-    return mcp.build_container_name(timestamp)
+    return _build_container_name(_MCP_SIDECAR_CONTAINER_NAME_PREFIX, timestamp)
+
+
+def _build_container_name(prefix: str, timestamp: str) -> str:
+    return f"{prefix}-{timestamp}"
 
 
 def _build_network_name(

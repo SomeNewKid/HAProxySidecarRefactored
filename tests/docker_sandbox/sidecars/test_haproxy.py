@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from docker_sandbox.agent_container import hardening
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
     NetworkGatewayProfile,
 )
 from docker_sandbox.orchestration import wiring
-from docker_sandbox.profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_spec import resolve_ollama_image_name
 from docker_sandbox.sidecars import (
     haproxy,
@@ -65,30 +65,6 @@ def test_haproxy_sidecar_config_probe_command_checks_mounted_config() -> None:
         "-f",
         "/usr/local/etc/haproxy/haproxy.cfg",
     ]
-
-
-def test_haproxy_sidecar_container_name_is_created_for_agent_network_runs() -> None:
-    """Verify haproxy runs get an HAProxy sidecar container."""
-    configuration = _create_haproxy_configuration()
-
-    container_name = haproxy.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name == "haproxy-sidecar-2026-07-20-16-00-00"
-
-
-def test_haproxy_sidecar_container_name_is_omitted_without_capability() -> None:
-    """Verify network access alone does not get an HAProxy sidecar container."""
-    configuration = _create_network_configuration()
-
-    container_name = haproxy.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name is None
 
 
 def test_haproxy_sidecar_network_connect_command_adds_internal_alias() -> None:
@@ -467,12 +443,12 @@ def _create_locked_down_configuration() -> DockerConfiguration:
         dockerfile_path=Path("Dockerfile"),
         build_context=Path("."),
         guest_user="sandbox",
-        profile=get_docker_profile(LOCKED_DOWN_PROFILE_NAME),
+        profile=hardening.base_locked_down_profile(),
     )
 
 
 def _create_network_configuration() -> DockerConfiguration:
-    profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
+    profile = hardening.base_locked_down_profile()
     network_gateway = NetworkGatewayProfile(
         image_name="ubuntu/squid:latest",
         proxy_host="egress-gateway",

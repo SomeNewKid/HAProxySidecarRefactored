@@ -426,7 +426,7 @@ def _capture_site_screenshot(url: str, screenshot_path: Path) -> None:
             try:
                 page = browser.new_page(viewport={"width": 1280, "height": 720})
                 page.goto(url, wait_until="load", timeout=30000)
-                page.screenshot(path=str(temporary_path), type="png")
+                page.screenshot(path=str(temporary_path), type="png", full_page=True)
             finally:
                 browser.close()
 

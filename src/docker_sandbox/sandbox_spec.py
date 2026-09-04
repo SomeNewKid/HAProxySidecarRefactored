@@ -12,6 +12,7 @@ from typing import Any
 
 from .agent_container import hardening, image
 from .models import DockerProfile, HAProxyConfiguration
+from .orchestration import network
 
 _IMAGE_REPOSITORY = "sandbox-agent/sandbox-agent"
 _OLLAMA_IMAGE_REPOSITORY = "sandbox-agent/ollama-sidecar"
@@ -84,7 +85,7 @@ _SUPPORTED_CAPABILITIES = {
 _HASH_LENGTH = 16
 _OPENAI_API_KEY_ENVIRONMENT_VARIABLE = "OPENAI_API_KEY"
 _ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE = "ANTHROPIC_API_KEY"
-_DEFAULT_HAPROXY_BACKEND_HOST = "host.docker.internal"
+_DEFAULT_HAPROXY_BACKEND_HOST = network.DOCKER_HOST_GATEWAY_HOSTNAME
 
 
 @dataclass(frozen=True)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from docker_sandbox.models import DockerConfiguration, SandboxRunTarget
+from docker_sandbox.models import DockerConfiguration
+from docker_sandbox.orchestration import network
 from docker_sandbox.orchestration.artifacts import (
     write_docker_log_artifacts,
     write_json_artifact,
@@ -23,35 +24,7 @@ _JINA_READER_STDERR_FILE_NAME = "jina-reader-stderr.txt"
 _JINA_READER_METADATA_FILE_NAME = "jina-reader-metadata.json"
 _JINA_READER_READINESS_RESULTS_FILE_NAME = "jina-reader-readiness-results.json"
 _JINA_READER_IMAGE_NAME = "ghcr.io/jina-ai/reader:oss"
-_JINA_READER_CONTAINER_NAME_PREFIX = "jina-reader"
-_JINA_READER_ALIAS = "jina-reader"
-_JINA_READER_PORT = 8081
-_JINA_READER_READINESS_URL = "https://example.com"
 _JINA_READER_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
-_JINA_READER_CAPABILITY = "jina_reader"
-_MCP_SIDECAR_ALIAS = "mcp-sidecar"
-_SQUID_GATEWAY_ALIAS = "egress-gateway"
-_SQUID_GATEWAY_PORT = 3128
-
-
-def should_start(configuration: DockerConfiguration) -> bool:
-    """Return whether the Jina Reader sidecar should be started."""
-    return (
-        configuration.run_target == SandboxRunTarget.AGENT
-        and configuration.profile.network_gateway is not None
-        and _JINA_READER_CAPABILITY in configuration.enabled_capabilities
-    )
-
-
-def build_container_name(
-    configuration: DockerConfiguration,
-    timestamp: str,
-) -> str | None:
-    """Build the Jina Reader container name for a sandbox run."""
-    if not should_start(configuration):
-        return None
-
-    return f"{_JINA_READER_CONTAINER_NAME_PREFIX}-{timestamp}"
 
 
 def start(
@@ -61,9 +34,6 @@ def start(
     jina_reader_container_name: str | None,
 ) -> list[list[str]] | None:
     """Start the Jina Reader sidecar and persist startup results."""
-    if not should_start(configuration):
-        return None
-
     if network_name is None or jina_reader_container_name is None:
         raise RuntimeError("Jina Reader requires an internal network.")
 
@@ -88,13 +58,16 @@ def build_run_command(
     jina_reader_container_name: str,
 ) -> list[str]:
     """Build the Docker run command for the Jina Reader sidecar."""
-    proxy_url = f"http://{_SQUID_GATEWAY_ALIAS}:{_SQUID_GATEWAY_PORT}"
+    proxy_url = network.http_url(
+        network.SQUID_GATEWAY_ALIAS,
+        network.SQUID_GATEWAY_PORT,
+    )
     no_proxy = ",".join(
         (
-            "localhost",
-            "127.0.0.1",
-            _JINA_READER_ALIAS,
-            _MCP_SIDECAR_ALIAS,
+            network.LOCALHOST,
+            network.LOOPBACK_IPV4_ADDRESS,
+            network.JINA_READER_ALIAS,
+            network.MCP_SIDECAR_ALIAS,
         )
     )
     return [
@@ -106,7 +79,7 @@ def build_run_command(
         "--network",
         network_name,
         "--network-alias",
-        _JINA_READER_ALIAS,
+        network.JINA_READER_ALIAS,
         "--env",
         f"HTTP_PROXY={proxy_url}",
         "--env",
@@ -125,9 +98,6 @@ def wait_until_ready(
     intervals_seconds: tuple[float, ...] = _JINA_READER_READINESS_INTERVALS_SECONDS,
 ) -> None:
     """Wait for the Jina Reader sidecar readiness checks to pass."""
-    if not should_start(configuration):
-        return
-
     if network_name is None or jina_reader_container_name is None:
         raise RuntimeError("Jina Reader readiness check requires an internal network.")
 
@@ -150,8 +120,11 @@ def wait_until_ready(
     ready = all(bool(phase["success"]) for phase in phases)
     result = {
         "container_name": jina_reader_container_name,
-        "reader_url": f"http://{_JINA_READER_ALIAS}:{_JINA_READER_PORT}",
-        "fetch_url": _JINA_READER_READINESS_URL,
+        "reader_url": network.http_url(
+            network.JINA_READER_ALIAS,
+            network.JINA_READER_PORT,
+        ),
+        "fetch_url": network.JINA_READER_READINESS_URL,
         "ready": ready,
         "phases": phases,
     }
@@ -183,16 +156,18 @@ def build_tcp_probe_script() -> str:
     """Build the TCP readiness probe script."""
     return (
         "import socket\n"
-        f"with socket.create_connection(('{_JINA_READER_ALIAS}', "
-        f"{_JINA_READER_PORT}), timeout=5):\n"
+        f"with socket.create_connection(('{network.JINA_READER_ALIAS}', "
+        f"{network.JINA_READER_PORT}), timeout=5):\n"
         "    print('ready')\n"
     )
 
 
 def build_fetch_probe_script() -> str:
     """Build the HTTP fetch readiness probe script."""
-    reader_url = (
-        f"http://{_JINA_READER_ALIAS}:{_JINA_READER_PORT}/{_JINA_READER_READINESS_URL}"
+    reader_url = network.http_url(
+        network.JINA_READER_ALIAS,
+        network.JINA_READER_PORT,
+        network.JINA_READER_READINESS_URL,
     )
     return (
         "from urllib.request import urlopen\n"
@@ -229,9 +204,7 @@ def write_logs(
     jina_reader_container_name: str | None,
 ) -> None:
     """Write Jina Reader Docker logs for the sandbox run."""
-    if not should_start(configuration):
-        return
-
+    _ = configuration
     if jina_reader_container_name is None:
         return
 
@@ -256,9 +229,7 @@ def build_cleanup_commands(
     jina_reader_container_name: str | None,
 ) -> list[list[str]] | None:
     """Build cleanup commands for the Jina Reader sidecar."""
-    if not should_start(configuration):
-        return None
-
+    _ = configuration
     if jina_reader_container_name is None:
         return None
 

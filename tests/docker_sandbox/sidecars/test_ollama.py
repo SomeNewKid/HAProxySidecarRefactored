@@ -7,13 +7,13 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+from docker_sandbox.agent_container import hardening
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
     NetworkGatewayProfile,
 )
 from docker_sandbox.orchestration import wiring
-from docker_sandbox.profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_spec import resolve_ollama_image_name
 from docker_sandbox.sidecars import (
     mcp,
@@ -33,32 +33,6 @@ def test_ollama_sidecar_cleanup_removes_sidecar_before_network_cleanup(
     )
 
     assert cleanup_commands == [["docker", "rm", "--force", "ollama-sidecar-1"]]
-
-
-def test_ollama_sidecar_container_name_is_created_for_agent_network_runs(
-    tmp_path: Path,
-) -> None:
-    """Verify ollama runs get an Ollama sidecar container."""
-    configuration = _create_ollama_configuration(tmp_path)
-
-    container_name = ollama.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name == "ollama-sidecar-2026-07-20-16-00-00"
-
-
-def test_ollama_sidecar_container_name_is_omitted_without_capability() -> None:
-    """Verify network access alone does not get an Ollama sidecar container."""
-    configuration = _create_network_configuration()
-
-    container_name = ollama.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name is None
 
 
 def test_ollama_sidecar_dockerfile_pulls_declared_models() -> None:
@@ -489,12 +463,12 @@ def _create_locked_down_configuration() -> DockerConfiguration:
         dockerfile_path=Path("Dockerfile"),
         build_context=Path("."),
         guest_user="sandbox",
-        profile=get_docker_profile(LOCKED_DOWN_PROFILE_NAME),
+        profile=hardening.base_locked_down_profile(),
     )
 
 
 def _create_network_configuration() -> DockerConfiguration:
-    profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
+    profile = hardening.base_locked_down_profile()
     network_gateway = NetworkGatewayProfile(
         image_name="ubuntu/squid:latest",
         proxy_host="egress-gateway",

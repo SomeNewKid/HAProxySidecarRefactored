@@ -13,7 +13,6 @@ from .models import (
     DockerImageStatus,
     SandboxRunTarget,
 )
-from .profiles import SUPPORTED_PROFILE_NAMES, get_docker_profile
 from .run_results import save_run_results
 from .sandbox_container import run_sandbox_container
 from .sandbox_spec import (
@@ -25,7 +24,6 @@ from .sandbox_spec import (
 )
 
 _DEFAULT_BASE_DIRECTORY = Path(".docker_sandbox")
-_DEFAULT_DOCKERFILE = Path("src") / "docker_sandbox" / "dockerfile" / "Dockerfile"
 _DEFAULT_SANDBOX_SPEC = Path("src") / "sandbox_agent" / "sandbox_spec.toml"
 _DEFAULT_GUEST_USER = "sandbox"
 
@@ -71,26 +69,11 @@ def _parse_arguments(arguments: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--dockerfile",
-        type=Path,
-        default=_DEFAULT_DOCKERFILE,
-        help=f"Dockerfile used to build the image. Default: {_DEFAULT_DOCKERFILE}",
-    )
-    parser.add_argument(
         "--guest-user",
         default=_DEFAULT_GUEST_USER,
         help=(
             "Container user used to run Sandbox Agent. The default image creates "
             f"this user as '{_DEFAULT_GUEST_USER}'."
-        ),
-    )
-    parser.add_argument(
-        "--profile",
-        choices=SUPPORTED_PROFILE_NAMES,
-        default=None,
-        help=(
-            "Legacy Docker hardening profile to apply instead of the sandbox spec. "
-            f"Supported profiles: {', '.join(SUPPORTED_PROFILE_NAMES)}"
         ),
     )
     parser.add_argument(
@@ -127,19 +110,6 @@ def _configuration_from_arguments(
 ) -> DockerConfiguration:
     repository_root = Path.cwd().resolve()
     base_directory = arguments.base_directory.expanduser().resolve()
-    if arguments.profile is not None:
-        dockerfile_path = arguments.dockerfile.expanduser()
-        if not dockerfile_path.is_absolute():
-            dockerfile_path = repository_root / dockerfile_path
-        profile = get_docker_profile(arguments.profile)
-        return DockerConfiguration(
-            base_directory=base_directory,
-            dockerfile_path=dockerfile_path.resolve(),
-            build_context=repository_root,
-            guest_user=arguments.guest_user,
-            profile=profile,
-        )
-
     sandbox_spec_path = arguments.sandbox_spec.expanduser()
     if not sandbox_spec_path.is_absolute():
         sandbox_spec_path = repository_root / sandbox_spec_path

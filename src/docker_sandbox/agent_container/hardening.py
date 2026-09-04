@@ -16,13 +16,12 @@ from docker_sandbox.models import (
     NetworkDnsPolicy,
     NetworkGatewayProfile,
 )
+from docker_sandbox.orchestration import network
 
 LOCKED_DOWN_PROFILE_NAME = "locked-down"
 LOCKED_DOWN_IMAGE_NAME = "sandbox-agent/sandbox-agent:locked-down"
 
 _GATEWAY_IMAGE_NAME = "ubuntu/squid:latest"
-_GATEWAY_PROXY_HOST = "egress-gateway"
-_GATEWAY_PROXY_PORT = 3128
 _OPENAI_API_KEY_ENVIRONMENT_VARIABLE = "OPENAI_API_KEY"
 _ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE = "ANTHROPIC_API_KEY"
 _PROCESS_SPAWN_POLICY_ENVIRONMENT_VARIABLE = "SANDBOX_DENY_PROCESS_SPAWN"
@@ -30,16 +29,16 @@ _PLAYWRIGHT_BROWSERS_PATH = "/ms-playwright"
 _OPENAI_ALLOWED_DOMAIN = ".openai.com"
 _ANTHROPIC_ALLOWED_DOMAIN = ".anthropic.com"
 _NO_PROXY_HOSTS = (
-    "127.0.0.1",
-    "localhost",
-    "169.254.169.254",
-    "metadata.google.internal",
+    network.LOOPBACK_IPV4_ADDRESS,
+    network.LOCALHOST,
+    network.CLOUD_METADATA_IPV4_ADDRESS,
+    network.CLOUD_METADATA_HOSTNAME,
 )
 _BLOCKED_HOSTNAMES = (
-    "host.docker.internal",
-    "gateway.docker.internal",
-    "kubernetes.docker.internal",
-    "metadata.google.internal",
+    network.DOCKER_HOST_GATEWAY_HOSTNAME,
+    network.DOCKER_GATEWAY_HOSTNAME,
+    network.KUBERNETES_DOCKER_HOSTNAME,
+    network.CLOUD_METADATA_HOSTNAME,
 )
 _CREWAI_WRITABLE_TMPFS_OPTIONS = (
     "/tmp/sandbox-home:rw,nosuid,nodev,noexec,size=64m,uid=1000,gid=1000,mode=700",
@@ -234,8 +233,8 @@ def apply_network_capability(
     """Apply network capability hardening changes to an agent profile."""
     network_gateway = NetworkGatewayProfile(
         image_name=_GATEWAY_IMAGE_NAME,
-        proxy_host=_GATEWAY_PROXY_HOST,
-        proxy_port=_GATEWAY_PROXY_PORT,
+        proxy_host=network.SQUID_GATEWAY_ALIAS,
+        proxy_port=network.SQUID_GATEWAY_PORT,
         allowed_domains=allowed_domains,
         allowed_ip_addresses=allowed_ip_addresses,
         no_proxy_hosts=_NO_PROXY_HOSTS,

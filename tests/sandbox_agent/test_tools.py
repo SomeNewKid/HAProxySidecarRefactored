@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -271,6 +272,69 @@ def test_capture_site_screenshot_serves_site_and_writes_output_png(
     assert len(captured_urls) == 1
     assert captured_urls[0].startswith("http://127.0.0.1:")
     assert captured_urls[0].endswith("/index.html")
+
+
+def test_capture_site_screenshot_uses_full_page_capture(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Verify Playwright captures the whole page, not only the viewport."""
+    screenshot_path = tmp_path / "site-screenshot.png"
+    calls = []
+
+    class _FakePage:
+        def goto(self, url: str, wait_until: str, timeout: int) -> None:
+            calls.append(("goto", url, wait_until, timeout))
+
+        def screenshot(self, **kwargs) -> None:
+            calls.append(("screenshot", kwargs))
+            Path(kwargs["path"]).write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    class _FakeBrowser:
+        def new_page(self, **kwargs) -> _FakePage:
+            calls.append(("new_page", kwargs))
+            return _FakePage()
+
+        def close(self) -> None:
+            calls.append(("close",))
+
+    class _FakeChromium:
+        def launch(self, **kwargs) -> _FakeBrowser:
+            calls.append(("launch", kwargs))
+            return _FakeBrowser()
+
+    class _FakePlaywright:
+        chromium = _FakeChromium()
+
+    class _FakePlaywrightContext:
+        def __enter__(self) -> _FakePlaywright:
+            return _FakePlaywright()
+
+        def __exit__(self, exc_type, exc_value, traceback) -> None:
+            _ = exc_type
+            _ = exc_value
+            _ = traceback
+
+    class _FakePlaywrightModule:
+        @staticmethod
+        def sync_playwright() -> _FakePlaywrightContext:
+            return _FakePlaywrightContext()
+
+    def fake_import_module(module_name: str) -> _FakePlaywrightModule:
+        assert module_name == "playwright.sync_api"
+        return _FakePlaywrightModule()
+
+    monkeypatch.setattr("sandbox_agent.tools.import_module", fake_import_module)
+
+    capture_site_screenshot.__globals__["_capture_site_screenshot"](
+        "http://127.0.0.1:12345/index.html",
+        screenshot_path,
+    )
+
+    screenshot_call = next(call for call in calls if call[0] == "screenshot")
+    assert screenshot_call[1]["full_page"] is True
+    assert screenshot_call[1]["type"] == "png"
+    assert screenshot_path.read_bytes() == b"\x89PNG\r\n\x1a\n"
 
 
 def test_capture_site_screenshot_rejects_nested_output_path(

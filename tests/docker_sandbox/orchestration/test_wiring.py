@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from docker_sandbox.models import (
@@ -9,6 +10,7 @@ from docker_sandbox.models import (
     DockerProfile,
     HAProxyConfiguration,
     NetworkGatewayProfile,
+    SandboxRunTarget,
 )
 from docker_sandbox.orchestration import wiring
 
@@ -19,6 +21,53 @@ def test_wiring_omits_mcp_without_exposed_tools_or_resources() -> None:
 
     assert wiring.MCP not in wiring.ordered_sidecars(configuration)
     assert wiring.should_start_mcp_sidecar(configuration) is False
+
+
+def test_wiring_starts_capability_sidecars_for_agent_network_runs() -> None:
+    """Verify sidecar start decisions are centralized in wiring."""
+    configuration = _create_wired_configuration()
+
+    assert wiring.should_start_jina_reader(configuration) is True
+    assert wiring.should_start_code_sidecar(configuration) is True
+    assert wiring.should_start_haproxy_sidecar(configuration) is True
+    assert wiring.should_start_ollama_sidecar(configuration) is True
+
+
+def test_wiring_omits_capability_sidecars_without_network() -> None:
+    """Verify sidecars require the sandbox network gateway."""
+    configuration = _create_wired_configuration()
+    profile = replace(configuration.profile, network_gateway=None)
+    configuration = replace(configuration, profile=profile)
+
+    assert wiring.should_start_squid_gateway(configuration) is False
+    assert wiring.should_start_jina_reader(configuration) is False
+    assert wiring.should_start_code_sidecar(configuration) is False
+    assert wiring.should_start_haproxy_sidecar(configuration) is False
+    assert wiring.should_start_ollama_sidecar(configuration) is False
+
+
+def test_wiring_omits_capability_sidecars_without_capabilities() -> None:
+    """Verify network access alone does not start optional sidecars."""
+    configuration = _create_wired_configuration()
+    configuration = replace(configuration, enabled_capabilities=frozenset())
+
+    assert wiring.should_start_squid_gateway(configuration) is True
+    assert wiring.should_start_jina_reader(configuration) is False
+    assert wiring.should_start_code_sidecar(configuration) is False
+    assert wiring.should_start_haproxy_sidecar(configuration) is False
+    assert wiring.should_start_ollama_sidecar(configuration) is False
+
+
+def test_wiring_omits_capability_sidecars_for_non_agent_runs() -> None:
+    """Verify optional sidecars are only started for the agent workload."""
+    configuration = _create_wired_configuration()
+    configuration = replace(configuration, run_target=SandboxRunTarget.TESTER)
+
+    assert wiring.should_start_squid_gateway(configuration) is True
+    assert wiring.should_start_jina_reader(configuration) is False
+    assert wiring.should_start_code_sidecar(configuration) is False
+    assert wiring.should_start_haproxy_sidecar(configuration) is False
+    assert wiring.should_start_ollama_sidecar(configuration) is False
 
 
 def test_wiring_applies_agent_sidecar_environment() -> None:

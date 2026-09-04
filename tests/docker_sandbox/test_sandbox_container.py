@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from docker_sandbox.agent_container import hardening
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
     NetworkGatewayProfile,
 )
 from docker_sandbox.orchestration import wiring
-from docker_sandbox.profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_container import (
     _build_mcp_sidecar_cleanup_commands,
     _build_mcp_sidecar_container_name,
@@ -328,7 +328,7 @@ def test_write_mcp_sidecar_exposure_persists_config(tmp_path: Path) -> None:
 
 
 def _create_network_configuration() -> DockerConfiguration:
-    profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
+    profile = hardening.base_locked_down_profile()
     network_gateway = NetworkGatewayProfile(
         image_name="ubuntu/squid:latest",
         proxy_host="egress-gateway",
@@ -405,7 +405,7 @@ def _create_locked_down_configuration() -> DockerConfiguration:
         dockerfile_path=Path("Dockerfile"),
         build_context=Path("."),
         guest_user="sandbox",
-        profile=get_docker_profile(LOCKED_DOWN_PROFILE_NAME),
+        profile=hardening.base_locked_down_profile(),
     )
 
 

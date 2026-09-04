@@ -5,7 +5,8 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from docker_sandbox.models import DockerConfiguration, SandboxRunTarget
+from docker_sandbox.models import DockerConfiguration
+from docker_sandbox.orchestration import network
 from docker_sandbox.orchestration.artifacts import (
     command_result_data,
     write_docker_log_artifacts,
@@ -24,34 +25,10 @@ _CODE_SIDECAR_STDERR_FILE_NAME = "code-sidecar-stderr.txt"
 _CODE_SIDECAR_METADATA_FILE_NAME = "code-sidecar-metadata.json"
 _CODE_SIDECAR_READINESS_RESULTS_FILE_NAME = "code-sidecar-readiness-results.json"
 _CODE_SIDECAR_IMAGE_NAME = "code-sidecar:dev"
-_CODE_SIDECAR_CONTAINER_NAME_PREFIX = "code-sidecar"
-_CODE_SIDECAR_ALIAS = "code-sidecar"
-_CODE_SIDECAR_PORT = 8090
 _CODE_SIDECAR_OUTPUT_DIRECTORY_ENVIRONMENT_VARIABLE = "CODE_SIDECAR_OUTPUT_DIRECTORY"
 _CODE_SIDECAR_OUTPUT_DIRECTORY = "/code-sidecar-output"
 _CODE_SIDECAR_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
-_CODE_EXECUTION_CAPABILITY = "code_execution"
 _SECCOMP_PROFILE_FILE_NAME = "seccomp-profile.json"
-
-
-def should_start(configuration: DockerConfiguration) -> bool:
-    """Return whether the Code sidecar should be started."""
-    return (
-        configuration.run_target == SandboxRunTarget.AGENT
-        and configuration.profile.network_gateway is not None
-        and _CODE_EXECUTION_CAPABILITY in configuration.enabled_capabilities
-    )
-
-
-def build_container_name(
-    configuration: DockerConfiguration,
-    timestamp: str,
-) -> str | None:
-    """Build the Code sidecar container name for a sandbox run."""
-    if not should_start(configuration):
-        return None
-
-    return f"{_CODE_SIDECAR_CONTAINER_NAME_PREFIX}-{timestamp}"
 
 
 def start(
@@ -61,9 +38,6 @@ def start(
     code_sidecar_container_name: str | None,
 ) -> list[list[str]] | None:
     """Inspect/build/start the Code sidecar and persist startup results."""
-    if not should_start(configuration):
-        return None
-
     if network_name is None or code_sidecar_container_name is None:
         raise RuntimeError("Code sidecar requires an internal network.")
 
@@ -103,16 +77,17 @@ def wait_until_ready(
     intervals_seconds: tuple[float, ...] = _CODE_SIDECAR_READINESS_INTERVALS_SECONDS,
 ) -> None:
     """Wait for the Code sidecar health check to pass."""
-    if not should_start(configuration):
-        return
-
     if network_name is None or code_sidecar_container_name is None:
         raise RuntimeError("Code sidecar readiness check requires an internal network.")
 
     phase = _run_readiness_phase(configuration, network_name, intervals_seconds)
     result = {
         "container_name": code_sidecar_container_name,
-        "health_url": f"http://{_CODE_SIDECAR_ALIAS}:{_CODE_SIDECAR_PORT}/health",
+        "health_url": network.http_url(
+            network.CODE_SIDECAR_ALIAS,
+            network.CODE_SIDECAR_PORT,
+            "/health",
+        ),
         "ready": bool(phase["success"]),
         "phases": [phase],
     }
@@ -141,7 +116,11 @@ def build_health_probe_command(
 
 def build_health_probe_script() -> str:
     """Build the Code sidecar health probe script."""
-    health_url = f"http://{_CODE_SIDECAR_ALIAS}:{_CODE_SIDECAR_PORT}/health"
+    health_url = network.http_url(
+        network.CODE_SIDECAR_ALIAS,
+        network.CODE_SIDECAR_PORT,
+        "/health",
+    )
     return (
         "import json\n"
         "from urllib.request import urlopen\n"
@@ -218,7 +197,7 @@ def build_run_command(
         "--network",
         network_name,
         "--network-alias",
-        _CODE_SIDECAR_ALIAS,
+        network.CODE_SIDECAR_ALIAS,
         "--pids-limit",
         "32",
         "--memory",
@@ -246,9 +225,9 @@ def build_run_command(
         "-m",
         "code_sidecar",
         "--host",
-        "0.0.0.0",
+        network.ANY_IPV4_ADDRESS,
         "--port",
-        str(_CODE_SIDECAR_PORT),
+        str(network.CODE_SIDECAR_PORT),
     ]
 
 
@@ -267,9 +246,7 @@ def write_logs(
     code_sidecar_container_name: str | None,
 ) -> None:
     """Write Code sidecar Docker logs for the sandbox run."""
-    if not should_start(configuration):
-        return
-
+    _ = configuration
     if code_sidecar_container_name is None:
         return
 
@@ -294,9 +271,7 @@ def build_cleanup_commands(
     code_sidecar_container_name: str | None,
 ) -> list[list[str]] | None:
     """Build cleanup commands for the Code sidecar."""
-    if not should_start(configuration):
-        return None
-
+    _ = configuration
     if code_sidecar_container_name is None:
         return None
 

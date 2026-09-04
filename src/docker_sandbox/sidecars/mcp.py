@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from docker_sandbox.models import DockerConfiguration
+from docker_sandbox.orchestration import network
 from docker_sandbox.orchestration.artifacts import (
     command_result_data,
     write_docker_log_artifacts,
@@ -26,21 +27,11 @@ _MCP_SIDECAR_TOOL_CALLS_FILE_NAME = "mcp-sidecar-tool-calls.jsonl"
 _MCP_SIDECAR_EXPOSURE_FILE_NAME = "mcp-sidecar-exposure.json"
 _MCP_SIDECAR_READINESS_RESULTS_FILE_NAME = "mcp-sidecar-readiness-results.json"
 _MCP_SIDECAR_IMAGE_NAME = "mcp-sidecar:dev"
-_MCP_SIDECAR_CONTAINER_NAME_PREFIX = "mcp-sidecar"
-_MCP_SIDECAR_ALIAS = "mcp-sidecar"
-_MCP_SIDECAR_PORT = 8000
 _MCP_SIDECAR_AUDIT_LOG_PATH_ENVIRONMENT_VARIABLE = "MCP_SIDECAR_AUDIT_LOG_PATH"
 _MCP_SIDECAR_EXPOSURE_PATH_ENVIRONMENT_VARIABLE = "MCP_SIDECAR_EXPOSURE_PATH"
 _MCP_SIDECAR_OUTPUT_DIRECTORY = "/mcp-sidecar-output"
 _MCP_SIDECAR_CONFIG_DIRECTORY = "/mcp-sidecar-config"
 _MCP_SIDECAR_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
-_SQUID_GATEWAY_ALIAS = "egress-gateway"
-_SQUID_GATEWAY_PORT = 3128
-
-
-def build_container_name(timestamp: str) -> str:
-    """Build the MCP sidecar container name for a sandbox run."""
-    return f"{_MCP_SIDECAR_CONTAINER_NAME_PREFIX}-{timestamp}"
 
 
 def start(
@@ -125,7 +116,10 @@ def build_run_command(
     database_environment_options: list[str],
 ) -> list[str]:
     """Build the Docker run command for the MCP sidecar."""
-    proxy_url = f"http://{_SQUID_GATEWAY_ALIAS}:{_SQUID_GATEWAY_PORT}"
+    proxy_url = network.http_url(
+        network.SQUID_GATEWAY_ALIAS,
+        network.SQUID_GATEWAY_PORT,
+    )
     source_mount = _build_source_mount(configuration)
     output_mount = _build_output_mount(run_directory)
     exposure_mount = _build_exposure_mount(run_directory)
@@ -142,7 +136,7 @@ def build_run_command(
         "--network",
         network_name,
         "--network-alias",
-        _MCP_SIDECAR_ALIAS,
+        network.MCP_SIDECAR_ALIAS,
         "--env",
         f"HTTP_PROXY={proxy_url}",
         "--env",
@@ -150,9 +144,15 @@ def build_run_command(
         "--env",
         f"NO_PROXY={','.join(no_proxy_hosts)}",
         "--env",
-        (f"JINA_READER_URL=http://{jina_reader_alias()}:{jina_reader_port()}"),
+        (
+            "JINA_READER_URL="
+            f"{network.http_url(network.JINA_READER_ALIAS, network.JINA_READER_PORT)}"
+        ),
         "--env",
-        (f"CODE_SIDECAR_URL=http://{code_sidecar_alias()}:{code_sidecar_port()}"),
+        (
+            "CODE_SIDECAR_URL="
+            f"{network.http_url(network.CODE_SIDECAR_ALIAS, network.CODE_SIDECAR_PORT)}"
+        ),
         "--env",
         f"{_MCP_SIDECAR_AUDIT_LOG_PATH_ENVIRONMENT_VARIABLE}={audit_log_path}",
         "--env",
@@ -172,9 +172,9 @@ def build_run_command(
             "-m",
             "mcp_sidecar",
             "--host",
-            "0.0.0.0",
+            network.ANY_IPV4_ADDRESS,
             "--port",
-            str(_MCP_SIDECAR_PORT),
+            str(network.MCP_SIDECAR_PORT),
         ]
     )
     return command
@@ -194,7 +194,11 @@ def wait_until_ready(
     phase = _run_readiness_phase(configuration, network_name, intervals_seconds)
     result = {
         "container_name": mcp_sidecar_container_name,
-        "health_url": f"http://{_MCP_SIDECAR_ALIAS}:{_MCP_SIDECAR_PORT}/health",
+        "health_url": network.http_url(
+            network.MCP_SIDECAR_ALIAS,
+            network.MCP_SIDECAR_PORT,
+            "/health",
+        ),
         "ready": bool(phase["success"]),
         "phases": [phase],
     }
@@ -223,7 +227,11 @@ def build_health_probe_command(
 
 def build_health_probe_script() -> str:
     """Build the MCP sidecar health probe script."""
-    health_url = f"http://{_MCP_SIDECAR_ALIAS}:{_MCP_SIDECAR_PORT}/health"
+    health_url = network.http_url(
+        network.MCP_SIDECAR_ALIAS,
+        network.MCP_SIDECAR_PORT,
+        "/health",
+    )
     return (
         "import json\n"
         "from urllib.request import urlopen\n"
@@ -304,30 +312,6 @@ def build_cleanup_commands(
     return [[DOCKER_EXECUTABLE, "rm", "--force", mcp_sidecar_container_name]]
 
 
-def build_no_proxy_hosts(
-    extra_hosts: tuple[str, ...] = (),
-) -> tuple[str, ...]:
-    """Build the MCP sidecar no-proxy host list."""
-    return (
-        "localhost",
-        "127.0.0.1",
-        _MCP_SIDECAR_ALIAS,
-        jina_reader_alias(),
-        code_sidecar_alias(),
-        *extra_hosts,
-    )
-
-
-def alias() -> str:
-    """Return the MCP sidecar network alias."""
-    return _MCP_SIDECAR_ALIAS
-
-
-def port() -> int:
-    """Return the MCP sidecar port."""
-    return _MCP_SIDECAR_PORT
-
-
 def tool_calls_file_name() -> str:
     """Return the MCP sidecar audit log file name."""
     return _MCP_SIDECAR_TOOL_CALLS_FILE_NAME
@@ -391,23 +375,3 @@ def _build_exposure_mount(run_directory: Path) -> str:
         f"target={_MCP_SIDECAR_CONFIG_DIRECTORY}/{_MCP_SIDECAR_EXPOSURE_FILE_NAME},"
         "readonly"
     )
-
-
-def jina_reader_alias() -> str:
-    """Return the Jina Reader network alias used by MCP."""
-    return "jina-reader"
-
-
-def jina_reader_port() -> int:
-    """Return the Jina Reader port used by MCP."""
-    return 8081
-
-
-def code_sidecar_alias() -> str:
-    """Return the Code sidecar network alias used by MCP."""
-    return "code-sidecar"
-
-
-def code_sidecar_port() -> int:
-    """Return the Code sidecar port used by MCP."""
-    return 8090

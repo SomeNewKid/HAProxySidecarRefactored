@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
+from docker_sandbox.agent_container import hardening
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
     NetworkGatewayProfile,
 )
 from docker_sandbox.orchestration import wiring
-from docker_sandbox.profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_spec import resolve_ollama_image_name
 from docker_sandbox.sidecars import (
     code_execution,
@@ -72,30 +72,6 @@ def test_code_sidecar_cleanup_removes_sidecar_before_network_cleanup() -> None:
     )
 
     assert cleanup_commands == [["docker", "rm", "--force", "code-sidecar-1"]]
-
-
-def test_code_sidecar_container_name_is_created_for_agent_network_runs() -> None:
-    """Verify code_execution runs get a code sidecar container."""
-    configuration = _create_code_execution_configuration()
-
-    container_name = code_execution.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name == "code-sidecar-2026-07-20-16-00-00"
-
-
-def test_code_sidecar_container_name_is_omitted_without_capability() -> None:
-    """Verify network access alone does not get a code sidecar container."""
-    configuration = _create_network_configuration()
-
-    container_name = code_execution.build_container_name(
-        configuration,
-        "2026-07-20-16-00-00",
-    )
-
-    assert container_name is None
 
 
 def test_code_sidecar_health_probe_script_targets_health_route() -> None:
@@ -315,12 +291,12 @@ def _create_locked_down_configuration() -> DockerConfiguration:
         dockerfile_path=Path("Dockerfile"),
         build_context=Path("."),
         guest_user="sandbox",
-        profile=get_docker_profile(LOCKED_DOWN_PROFILE_NAME),
+        profile=hardening.base_locked_down_profile(),
     )
 
 
 def _create_network_configuration() -> DockerConfiguration:
-    profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
+    profile = hardening.base_locked_down_profile()
     network_gateway = NetworkGatewayProfile(
         image_name="ubuntu/squid:latest",
         proxy_host="egress-gateway",

@@ -31,28 +31,20 @@ def _create_metadata_data(result: DockerRunResult) -> dict[str, object]:
         "profile_name": result.profile_name,
         "container_name": result.container_name,
         "network_name": result.network_name,
-        "gateway_container_name": result.gateway_container_name,
         "exit_code": result.exit_code,
         "command": result.command,
         "remove_command": result.remove_command,
-        "gateway_commands": result.gateway_commands,
         "gateway_ip_address": result.gateway_ip_address,
-        "gateway_cleanup_commands": result.gateway_cleanup_commands,
-        "mcp_sidecar_container_name": result.mcp_sidecar_container_name,
-        "mcp_sidecar_commands": result.mcp_sidecar_commands,
-        "mcp_sidecar_cleanup_commands": result.mcp_sidecar_cleanup_commands,
-        "jina_reader_container_name": result.jina_reader_container_name,
-        "jina_reader_commands": result.jina_reader_commands,
-        "jina_reader_cleanup_commands": result.jina_reader_cleanup_commands,
-        "code_sidecar_container_name": result.code_sidecar_container_name,
-        "code_sidecar_commands": result.code_sidecar_commands,
-        "code_sidecar_cleanup_commands": result.code_sidecar_cleanup_commands,
-        "haproxy_sidecar_container_name": result.haproxy_sidecar_container_name,
-        "haproxy_sidecar_commands": result.haproxy_sidecar_commands,
-        "haproxy_sidecar_cleanup_commands": result.haproxy_sidecar_cleanup_commands,
-        "ollama_sidecar_container_name": result.ollama_sidecar_container_name,
-        "ollama_sidecar_commands": result.ollama_sidecar_commands,
-        "ollama_sidecar_cleanup_commands": result.ollama_sidecar_cleanup_commands,
+        "sidecars": [
+            {
+                "name": sidecar.name,
+                "container_name": sidecar.container_name,
+                "start_commands": sidecar.start_commands,
+                "cleanup_commands": sidecar.cleanup_commands,
+            }
+            for sidecar in result.sidecars
+        ],
+        "cleanup_commands": result.cleanup_commands,
     }
 
 

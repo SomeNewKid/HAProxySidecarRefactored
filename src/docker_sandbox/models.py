@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from docker_sandbox.orchestration import network
+
 
 @dataclass(frozen=True)
 class LandlockPathRule:
@@ -38,17 +40,17 @@ class NetworkDnsPolicy:
     """DNS and Docker host-name hardening for a Docker profile."""
 
     use_gateway_as_dns: bool = True
-    fallback_dns_address: str = "127.0.0.1"
+    fallback_dns_address: str = network.LOOPBACK_IPV4_ADDRESS
     dns_options: tuple[str, ...] = (
         "attempts:1",
         "timeout:1",
     )
     blocked_hostnames: tuple[str, ...] = (
-        "host.docker.internal",
-        "gateway.docker.internal",
-        "kubernetes.docker.internal",
+        network.DOCKER_HOST_GATEWAY_HOSTNAME,
+        network.DOCKER_GATEWAY_HOSTNAME,
+        network.KUBERNETES_DOCKER_HOSTNAME,
     )
-    blocked_hostname_address: str = "0.0.0.0"
+    blocked_hostname_address: str = network.BLOCKED_HOSTNAME_ADDRESS
 
 
 @dataclass(frozen=True)
@@ -308,6 +310,16 @@ class DockerImageResult:
 
 
 @dataclass(frozen=True)
+class SidecarRunRecord:
+    """Lifecycle command record for a Docker sidecar in one sandbox run."""
+
+    name: str
+    container_name: str | None
+    start_commands: tuple[list[str], ...] = ()
+    cleanup_commands: tuple[list[str], ...] = ()
+
+
+@dataclass(frozen=True)
 class DockerRunResult:
     """Result of running Sandbox Tester in a disposable Docker container."""
 
@@ -321,25 +333,9 @@ class DockerRunResult:
     stdout: str
     stderr: str
     network_name: str | None = None
-    gateway_container_name: str | None = None
     gateway_ip_address: str | None = None
-    gateway_commands: list[list[str]] | None = None
-    gateway_cleanup_commands: list[list[str]] | None = None
-    mcp_sidecar_container_name: str | None = None
-    mcp_sidecar_commands: list[list[str]] | None = None
-    mcp_sidecar_cleanup_commands: list[list[str]] | None = None
-    jina_reader_container_name: str | None = None
-    jina_reader_commands: list[list[str]] | None = None
-    jina_reader_cleanup_commands: list[list[str]] | None = None
-    code_sidecar_container_name: str | None = None
-    code_sidecar_commands: list[list[str]] | None = None
-    code_sidecar_cleanup_commands: list[list[str]] | None = None
-    haproxy_sidecar_container_name: str | None = None
-    haproxy_sidecar_commands: list[list[str]] | None = None
-    haproxy_sidecar_cleanup_commands: list[list[str]] | None = None
-    ollama_sidecar_container_name: str | None = None
-    ollama_sidecar_commands: list[list[str]] | None = None
-    ollama_sidecar_cleanup_commands: list[list[str]] | None = None
+    sidecars: tuple[SidecarRunRecord, ...] = ()
+    cleanup_commands: tuple[list[str], ...] = ()
 
     def remove_container(self) -> None:
         """Remove disposable Docker resources for this run."""
@@ -351,23 +347,7 @@ class DockerRunResult:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        if self.gateway_cleanup_commands is None:
-            return
-
-        cleanup_commands = []
-        if self.mcp_sidecar_cleanup_commands is not None:
-            cleanup_commands.extend(self.mcp_sidecar_cleanup_commands)
-        if self.jina_reader_cleanup_commands is not None:
-            cleanup_commands.extend(self.jina_reader_cleanup_commands)
-        if self.code_sidecar_cleanup_commands is not None:
-            cleanup_commands.extend(self.code_sidecar_cleanup_commands)
-        if self.haproxy_sidecar_cleanup_commands is not None:
-            cleanup_commands.extend(self.haproxy_sidecar_cleanup_commands)
-        if self.ollama_sidecar_cleanup_commands is not None:
-            cleanup_commands.extend(self.ollama_sidecar_cleanup_commands)
-        cleanup_commands.extend(self.gateway_cleanup_commands)
-
-        for command in cleanup_commands:
+        for command in self.cleanup_commands:
             subprocess.run(
                 command,
                 check=False,

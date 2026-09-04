@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from docker_sandbox.models import DockerConfiguration, NetworkGatewayProfile
+from docker_sandbox.orchestration import network
 from docker_sandbox.orchestration.artifacts import (
     command_result_data,
     write_docker_log_artifacts,
@@ -20,23 +21,10 @@ from docker_sandbox.orchestration.docker import (
 )
 from docker_sandbox.orchestration.types import CommandResult
 
-_GATEWAY_CONTAINER_NAME_PREFIX = "sandbox-agent-gateway"
 _SQUID_CONFIGURATION_FILE_NAME = "squid.conf"
 _GATEWAY_START_RESULTS_FILE_NAME = "gateway-start-results.json"
 _GATEWAY_LOG_FILE_NAME = "gateway-logs.json"
-_GATEWAY_ALIAS = "egress-gateway"
 _SQUID_CONFIGURATION_PATH = "/etc/squid/squid.conf"
-
-
-def build_container_name(
-    configuration: DockerConfiguration,
-    timestamp: str,
-) -> str | None:
-    """Build the Squid gateway container name for a sandbox run."""
-    if configuration.profile.network_gateway is None:
-        return None
-
-    return f"{_GATEWAY_CONTAINER_NAME_PREFIX}-{timestamp}"
 
 
 def write_configuration(
@@ -47,7 +35,7 @@ def write_configuration(
     """Write the Squid configuration artifact for the sandbox run."""
     gateway = configuration.profile.network_gateway
     if gateway is None:
-        return
+        raise RuntimeError("Squid configuration requires a network gateway profile.")
 
     allowed_domains = build_allowed_domains(gateway.allowed_domains, config_data)
     allowed_ip_addresses = _build_allowed_ip_addresses(gateway.allowed_ip_addresses)
@@ -82,7 +70,7 @@ def start_gateway(
     """Start Squid and fail if its readiness check does not pass."""
     gateway = configuration.profile.network_gateway
     if gateway is None:
-        return None, None
+        raise RuntimeError("Squid gateway requires a network gateway profile.")
 
     if network_name is None or gateway_container_name is None:
         raise RuntimeError(
@@ -119,9 +107,7 @@ def write_logs(
     gateway_container_name: str | None,
 ) -> None:
     """Write Squid Docker logs for the sandbox run."""
-    if configuration.profile.network_gateway is None:
-        return
-
+    _ = configuration
     if gateway_container_name is None:
         return
 
@@ -168,7 +154,7 @@ def build_start_commands(
             "network",
             "connect",
             "--alias",
-            _GATEWAY_ALIAS,
+            network.SQUID_GATEWAY_ALIAS,
             network_name,
             gateway_container_name,
         ],
@@ -196,9 +182,7 @@ def build_cleanup_commands(
     gateway_container_name: str | None,
 ) -> list[list[str]] | None:
     """Build cleanup commands for the Squid gateway and network."""
-    if configuration.profile.network_gateway is None:
-        return None
-
+    _ = configuration
     if network_name is None or gateway_container_name is None:
         return None
 
@@ -216,10 +200,10 @@ def apply_agent_environment(
 ) -> None:
     """Add Squid proxy settings to an agent container environment."""
     proxy_host = gateway_ip_address or gateway.proxy_host
-    proxy_url = f"http://{proxy_host}:{gateway.proxy_port}"
+    proxy_url = network.http_url(proxy_host, gateway.proxy_port)
     no_proxy_hosts = (
-        "localhost",
-        "127.0.0.1",
+        network.LOCALHOST,
+        network.LOOPBACK_IPV4_ADDRESS,
         *gateway.no_proxy_hosts,
         *extra_no_proxy_hosts,
     )

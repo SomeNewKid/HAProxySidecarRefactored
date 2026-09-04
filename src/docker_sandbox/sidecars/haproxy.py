@@ -8,8 +8,8 @@ from pathlib import Path
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
-    SandboxRunTarget,
 )
+from docker_sandbox.orchestration import network
 from docker_sandbox.orchestration.artifacts import (
     command_result_data,
     write_docker_log_artifacts,
@@ -28,32 +28,9 @@ _HAPROXY_SIDECAR_STDOUT_FILE_NAME = "haproxy-sidecar-stdout.txt"
 _HAPROXY_SIDECAR_STDERR_FILE_NAME = "haproxy-sidecar-stderr.txt"
 _HAPROXY_SIDECAR_METADATA_FILE_NAME = "haproxy-sidecar-metadata.json"
 _HAPROXY_SIDECAR_READINESS_RESULTS_FILE_NAME = "haproxy-sidecar-readiness-results.json"
-_HAPROXY_CAPABILITY = "haproxy"
 _HAPROXY_IMAGE_NAME = "haproxy:latest"
-_HAPROXY_SIDECAR_CONTAINER_NAME_PREFIX = "haproxy-sidecar"
-_HAPROXY_SIDECAR_ALIAS = "haproxy-sidecar"
 _HAPROXY_CONFIGURATION_PATH = "/usr/local/etc/haproxy/haproxy.cfg"
 _HAPROXY_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
-
-
-def should_start(configuration: DockerConfiguration) -> bool:
-    """Return whether the HAProxy sidecar should be started."""
-    return (
-        configuration.run_target == SandboxRunTarget.AGENT
-        and configuration.profile.network_gateway is not None
-        and _HAPROXY_CAPABILITY in configuration.enabled_capabilities
-    )
-
-
-def build_container_name(
-    configuration: DockerConfiguration,
-    timestamp: str,
-) -> str | None:
-    """Build the HAProxy container name for a sandbox run."""
-    if not should_start(configuration):
-        return None
-
-    return f"{_HAPROXY_SIDECAR_CONTAINER_NAME_PREFIX}-{timestamp}"
 
 
 def write_configuration(
@@ -61,9 +38,6 @@ def write_configuration(
     run_directory: Path,
 ) -> None:
     """Write the HAProxy configuration artifact for the sandbox run."""
-    if not should_start(configuration):
-        return
-
     haproxy = get_configuration(configuration)
     config_path = run_directory / _HAPROXY_CONFIGURATION_FILE_NAME
     config_text = generate_configuration(haproxy.backend_host, haproxy.ports)
@@ -109,8 +83,6 @@ def get_configuration(
     configuration: DockerConfiguration,
 ) -> HAProxyConfiguration:
     """Return validated HAProxy sidecar settings."""
-    if _HAPROXY_CAPABILITY not in configuration.enabled_capabilities:
-        raise ValueError("HAProxy sidecar requires the haproxy capability.")
     if configuration.haproxy is None:
         raise ValueError("HAProxy sidecar configuration is not configured.")
     if not configuration.haproxy.ports:
@@ -126,9 +98,7 @@ def start(
     haproxy_sidecar_container_name: str | None,
 ) -> list[list[str]] | None:
     """Start HAProxy and connect it to the internal sandbox network."""
-    if not should_start(configuration):
-        return None
-
+    _ = configuration
     if network_name is None or haproxy_sidecar_container_name is None:
         raise RuntimeError("HAProxy sidecar requires an internal network.")
 
@@ -150,9 +120,7 @@ def wait_until_ready(
     intervals_seconds: tuple[float, ...] = _HAPROXY_READINESS_INTERVALS_SECONDS,
 ) -> None:
     """Wait for HAProxy process and configuration readiness checks."""
-    if not should_start(configuration):
-        return
-
+    _ = configuration
     if haproxy_sidecar_container_name is None:
         raise RuntimeError("HAProxy sidecar readiness check requires a container.")
 
@@ -260,7 +228,7 @@ def build_run_command(
         "--network",
         "bridge",
         "--add-host",
-        "host.docker.internal:host-gateway",
+        f"{network.DOCKER_HOST_GATEWAY_HOSTNAME}:host-gateway",
         "--mount",
         (
             f"type=bind,source={config_path},"
@@ -280,7 +248,7 @@ def build_network_connect_command(
         "network",
         "connect",
         "--alias",
-        _HAPROXY_SIDECAR_ALIAS,
+        network.HAPROXY_SIDECAR_ALIAS,
         network_name,
         haproxy_sidecar_container_name,
     ]
@@ -310,9 +278,6 @@ def write_logs(
     haproxy_sidecar_container_name: str | None,
 ) -> None:
     """Write HAProxy Docker logs for the sandbox run."""
-    if not should_start(configuration):
-        return
-
     if haproxy_sidecar_container_name is None:
         return
 
@@ -340,18 +305,11 @@ def build_cleanup_commands(
     haproxy_sidecar_container_name: str | None,
 ) -> list[list[str]] | None:
     """Build cleanup commands for the HAProxy sidecar."""
-    if not should_start(configuration):
-        return None
-
+    _ = configuration
     if haproxy_sidecar_container_name is None:
         return None
 
     return [[DOCKER_EXECUTABLE, "rm", "--force", haproxy_sidecar_container_name]]
-
-
-def alias() -> str:
-    """Return the HAProxy sidecar network alias."""
-    return _HAPROXY_SIDECAR_ALIAS
 
 
 def _run_recorded_command(command: list[str]) -> dict[str, object]:
