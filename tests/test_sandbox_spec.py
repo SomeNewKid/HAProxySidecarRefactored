@@ -244,6 +244,7 @@ def test_default_sandbox_spec_exposes_sidecar_tools() -> None:
 
     spec = load_sandbox_spec(spec_path)
 
+    assert spec.has_capability("playwright_chromium") is True
     assert spec.mcp_sidecar_tools == (
         "get_html_element_name",
         "get_active_items",

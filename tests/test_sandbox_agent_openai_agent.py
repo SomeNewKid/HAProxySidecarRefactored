@@ -26,10 +26,9 @@ def test_create_openai_agent_uses_gpt_model_and_tools(monkeypatch) -> None:
     assert calls[0]["tools"] == [
         "tool:get_active_items",
         "tool:save_html_document",
-        "tool:save_answer",
     ]
     assert (
-        "Do not finish until all three tool calls have succeeded."
+        "Do not finish until both tool calls have succeeded."
         in (calls[0]["instructions"])
     )
 
@@ -83,23 +82,53 @@ def test_run_html_element_agent_lets_model_sequence_tool_calls(
         runner=_FakeRunner,
     )
     monkeypatch.setattr("sandbox_agent.openai_agent._SITE_DIRECTORY", tmp_path / "site")
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_squid_proxy_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_code_sidecar_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_jina_reader_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_ollama_sidecar_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.capture_site_screenshot",
+        lambda: {"success": True, "message": "Created site-screenshot.png"},
+    )
+    saved_answers = []
+    monkeypatch.setattr("sandbox_agent.tools.save_answer", saved_answers.append)
 
     result = run_html_element_agent()
 
-    assert result == "index.html lists 1 active item."
+    assert result == (
+        "index.html lists 1 active item. "
+        "Squid Proxy section: Updated index.html. "
+        "Code sidecar section: Updated index.html. "
+        "Jina Reader section: Updated index.html. "
+        "Ollama sidecar section: Updated index.html. "
+        "Screenshot: Created site-screenshot.png."
+    )
     assert (tmp_path / "site").exists()
+    assert saved_answers == [result]
     assert calls[0]["type"] == "agent"
     assert calls[0]["model"] == "gpt-4.1-mini"
     assert calls[0]["tools"] == [
         "tool:get_active_items",
         "tool:save_html_document",
-        "tool:save_answer",
     ]
     assert calls[1]["type"] == "run"
     assert "Use the get_active_items tool first." in calls[1]["prompt"]
     assert "Treat its response as a JSON array" in calls[1]["prompt"]
     assert "Save the document with the save_html_document tool." in (calls[1]["prompt"])
-    assert "save_answer tool" in calls[1]["prompt"]
+    assert "capture_site_screenshot tool" not in calls[1]["prompt"]
+    assert "save_answer tool" not in calls[1]["prompt"]
     assert calls[1]["max_turns"] == 10
 
 
@@ -113,10 +142,37 @@ def test_run_html_element_agent_accepts_explicit_model(tmp_path, monkeypatch) ->
 
     _install_fake_agent_dependencies(monkeypatch, agent=_FakeAgent)
     monkeypatch.setattr("sandbox_agent.openai_agent._SITE_DIRECTORY", tmp_path / "site")
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_squid_proxy_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_code_sidecar_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_jina_reader_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.inject_ollama_sidecar_section",
+        lambda: {"success": True, "message": "Updated index.html"},
+    )
+    monkeypatch.setattr(
+        "sandbox_agent.tools.capture_site_screenshot",
+        lambda: {"success": True, "message": "Created site-screenshot.png"},
+    )
+    monkeypatch.setattr("sandbox_agent.tools.save_answer", lambda answer: None)
 
     result = run_html_element_agent("gpt-5-mini")
 
-    assert result == "ok"
+    assert result == (
+        "ok Squid Proxy section: Updated index.html. "
+        "Code sidecar section: Updated index.html. "
+        "Jina Reader section: Updated index.html. "
+        "Ollama sidecar section: Updated index.html. "
+        "Screenshot: Created site-screenshot.png."
+    )
     assert requested_models == ["gpt-5-mini"]
 
 
