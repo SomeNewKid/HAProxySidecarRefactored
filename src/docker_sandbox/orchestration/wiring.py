@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from docker_sandbox import capabilities
 from docker_sandbox.models import DockerConfiguration, SandboxRunTarget
 from docker_sandbox.orchestration import network
 from docker_sandbox.sidecars import haproxy, ollama, squid_gateway
@@ -12,10 +13,6 @@ CODE_EXECUTION = "code_execution"
 HAPROXY = "haproxy"
 OLLAMA = "ollama"
 MCP = "mcp"
-JINA_READER_CAPABILITY = "jina_reader"
-CODE_EXECUTION_CAPABILITY = "code_execution"
-HAPROXY_CAPABILITY = "haproxy"
-OLLAMA_CAPABILITY = "ollama"
 
 SIDECAR_START_ORDER = (
     SQUID_GATEWAY,
@@ -84,22 +81,22 @@ def should_start_mcp_sidecar(configuration: DockerConfiguration) -> bool:
 
 def should_start_jina_reader(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Jina Reader sidecar."""
-    return _should_start_capability_sidecar(configuration, JINA_READER_CAPABILITY)
+    return _should_start_capability_sidecar(configuration, capabilities.JINA_READER)
 
 
 def should_start_code_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Code sidecar."""
-    return _should_start_capability_sidecar(configuration, CODE_EXECUTION_CAPABILITY)
+    return _should_start_capability_sidecar(configuration, capabilities.CODE_EXECUTION)
 
 
 def should_start_haproxy_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the HAProxy sidecar."""
-    return _should_start_capability_sidecar(configuration, HAPROXY_CAPABILITY)
+    return _should_start_capability_sidecar(configuration, capabilities.HAPROXY)
 
 
 def should_start_ollama_sidecar(configuration: DockerConfiguration) -> bool:
     """Return whether this run needs the Ollama sidecar."""
-    return _should_start_capability_sidecar(configuration, OLLAMA_CAPABILITY)
+    return _should_start_capability_sidecar(configuration, capabilities.OLLAMA)
 
 
 def apply_agent_sidecar_environment(

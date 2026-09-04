@@ -6,6 +6,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any, Protocol
 
+from docker_sandbox import capabilities
 from docker_sandbox.models import (
     BrowserSurfaceProfile,
     DockerProfile,
@@ -65,21 +66,6 @@ class ProfileSpec(Protocol):
         """Return whether a capability is declared."""
         ...
 
-
-_NETWORK_CAPABILITY = "network"
-_OPENAI_CAPABILITY = "openai"
-_OPENAI_AGENTS_CAPABILITY = "openai_agents"
-_ANTHROPIC_CLAUDE_CAPABILITY = "anthropic_claude"
-_ANTHROPIC_PYTHON_CAPABILITY = "anthropic_python"
-_BEEAI_CAPABILITY = "ibm_beeai"
-_GOOGLE_ADK_CAPABILITY = "google_adk"
-_LANGCHAIN_CAPABILITY = "langchain"
-_LANGGRAPH_CAPABILITY = "langgraph"
-_MICROSOFT_AGENT_CAPABILITY = "microsoft_agent"
-_CREWAI_CAPABILITY = "crewai"
-_OTTO_AGENT_CAPABILITY = "otto_agent"
-_PLAYWRIGHT_CHROMIUM_CAPABILITY = "playwright_chromium"
-_SHELL_ACCESS_CAPABILITY = "shell_access"
 
 _LOCKED_DOWN_PROFILE = DockerProfile(
     name=LOCKED_DOWN_PROFILE_NAME,
@@ -191,7 +177,7 @@ def resolve_profile(
 ) -> DockerProfile:
     """Resolve a low-level Docker profile from a high-level sandbox spec."""
     profile = base_locked_down_profile()
-    if spec.has_capability(_NETWORK_CAPABILITY):
+    if spec.has_capability(capabilities.NETWORK):
         profile = apply_network_capability(
             profile,
             allowed_domains=resolve_allowed_domains(
@@ -207,15 +193,15 @@ def resolve_profile(
     if has_anthropic_family_capability(spec):
         profile = apply_anthropic_capability(profile)
 
-    if spec.has_capability(_SHELL_ACCESS_CAPABILITY) or spec.has_capability(
-        _ANTHROPIC_CLAUDE_CAPABILITY
+    if spec.has_capability(capabilities.SHELL_ACCESS) or spec.has_capability(
+        capabilities.ANTHROPIC_CLAUDE
     ):
         profile = apply_shell_access_capability(profile)
 
-    if spec.has_capability(_CREWAI_CAPABILITY):
+    if spec.has_capability(capabilities.CREWAI):
         profile = apply_crewai_capability(profile)
 
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
+    if spec.has_capability(capabilities.PLAYWRIGHT_CHROMIUM):
         profile = apply_playwright_capability(profile)
 
     return with_generated_identity(
@@ -388,24 +374,12 @@ def resolved_profile_data(profile: DockerProfile) -> dict[str, Any]:
 
 def has_openai_family_capability(spec: ProfileSpec) -> bool:
     """Return whether a spec includes an OpenAI-family capability."""
-    return (
-        spec.has_capability(_OPENAI_CAPABILITY)
-        or spec.has_capability(_OPENAI_AGENTS_CAPABILITY)
-        or spec.has_capability(_BEEAI_CAPABILITY)
-        or spec.has_capability(_GOOGLE_ADK_CAPABILITY)
-        or spec.has_capability(_LANGCHAIN_CAPABILITY)
-        or spec.has_capability(_LANGGRAPH_CAPABILITY)
-        or spec.has_capability(_MICROSOFT_AGENT_CAPABILITY)
-        or spec.has_capability(_CREWAI_CAPABILITY)
-        or spec.has_capability(_OTTO_AGENT_CAPABILITY)
-    )
+    return capabilities.has_openai_family_capability(spec)
 
 
 def has_anthropic_family_capability(spec: ProfileSpec) -> bool:
     """Return whether a spec includes an Anthropic-family capability."""
-    return spec.has_capability(_ANTHROPIC_CLAUDE_CAPABILITY) or spec.has_capability(
-        _ANTHROPIC_PYTHON_CAPABILITY
-    )
+    return capabilities.has_anthropic_family_capability(spec)
 
 
 def without_docker_network_none(options: tuple[str, ...]) -> tuple[str, ...]:

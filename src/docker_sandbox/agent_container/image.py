@@ -4,19 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
-_MCP_CLIENT_CAPABILITY = "mcp_client"
-_OPENAI_CAPABILITY = "openai"
-_OPENAI_AGENTS_CAPABILITY = "openai_agents"
-_ANTHROPIC_CLAUDE_CAPABILITY = "anthropic_claude"
-_ANTHROPIC_PYTHON_CAPABILITY = "anthropic_python"
-_BEEAI_CAPABILITY = "ibm_beeai"
-_GOOGLE_ADK_CAPABILITY = "google_adk"
-_LANGCHAIN_CAPABILITY = "langchain"
-_LANGGRAPH_CAPABILITY = "langgraph"
-_MICROSOFT_AGENT_CAPABILITY = "microsoft_agent"
-_CREWAI_CAPABILITY = "crewai"
-_OTTO_AGENT_CAPABILITY = "otto_agent"
-_PLAYWRIGHT_CHROMIUM_CAPABILITY = "playwright_chromium"
+from docker_sandbox import capabilities
+
 _MCP_PACKAGE = "mcp==1.28.1"
 _OPENAI_PACKAGE = "openai==2.45.0"
 _OPENAI_AGENTS_PACKAGE = "openai-agents==0.18.2"
@@ -135,35 +124,35 @@ def build_python_package_install_command(
 ) -> str:
     """Build the Python package installation command for an agent image."""
     packages = []
-    if spec.has_capability(_OPENAI_CAPABILITY):
+    if spec.has_capability(capabilities.OPENAI):
         packages.append(_OPENAI_PACKAGE)
-    if spec.has_capability(_OPENAI_AGENTS_CAPABILITY):
+    if spec.has_capability(capabilities.OPENAI_AGENTS):
         packages.append(_OPENAI_AGENTS_PACKAGE)
-    if spec.has_capability(_MCP_CLIENT_CAPABILITY):
+    if spec.has_capability(capabilities.MCP_CLIENT):
         packages.append(_MCP_PACKAGE)
-    if spec.has_capability(_ANTHROPIC_CLAUDE_CAPABILITY):
+    if spec.has_capability(capabilities.ANTHROPIC_CLAUDE):
         packages.append(_CLAUDE_AGENT_SDK_PACKAGE)
-    if spec.has_capability(_ANTHROPIC_PYTHON_CAPABILITY):
+    if spec.has_capability(capabilities.ANTHROPIC_PYTHON):
         packages.append(_ANTHROPIC_PACKAGE)
-    if spec.has_capability(_BEEAI_CAPABILITY):
+    if spec.has_capability(capabilities.BEEAI):
         packages.append(_BEEAI_PACKAGE)
         packages.append(_LITELLM_PROXY_PACKAGE)
-    if spec.has_capability(_GOOGLE_ADK_CAPABILITY):
+    if spec.has_capability(capabilities.GOOGLE_ADK):
         packages.append(_GOOGLE_ADK_PACKAGE)
         packages.append(_LITELLM_PROXY_PACKAGE)
-    if spec.has_capability(_LANGCHAIN_CAPABILITY):
+    if spec.has_capability(capabilities.LANGCHAIN):
         packages.append(_LANGCHAIN_PACKAGE)
         packages.append(_LANGCHAIN_OPENAI_PACKAGE)
-    if spec.has_capability(_LANGGRAPH_CAPABILITY):
+    if spec.has_capability(capabilities.LANGGRAPH):
         packages.append(_LANGGRAPH_PACKAGE)
         packages.append(_LANGCHAIN_OPENAI_PACKAGE)
-    if spec.has_capability(_MICROSOFT_AGENT_CAPABILITY):
+    if spec.has_capability(capabilities.MICROSOFT_AGENT):
         packages.append(_MICROSOFT_AGENT_PACKAGE)
-    if spec.has_capability(_CREWAI_CAPABILITY):
+    if spec.has_capability(capabilities.CREWAI):
         packages.append(_CREWAI_PACKAGE)
-    if spec.has_capability(_OTTO_AGENT_CAPABILITY):
+    if spec.has_capability(capabilities.OTTO_AGENT):
         packages.append(_OPENAI_PACKAGE)
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
+    if spec.has_capability(capabilities.PLAYWRIGHT_CHROMIUM):
         packages.append(_PLAYWRIGHT_PACKAGE)
     if include_probe_dependencies:
         packages.extend(_PROBE_PACKAGES)
@@ -173,7 +162,7 @@ def build_python_package_install_command(
 
     package_arguments = " ".join(packages)
     install_command = f"\nRUN python -m pip install --no-cache-dir {package_arguments}"
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
+    if spec.has_capability(capabilities.PLAYWRIGHT_CHROMIUM):
         install_command += (
             " \\\n    && python -m playwright install --with-deps chromium"
         )
