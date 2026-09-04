@@ -6,21 +6,17 @@ import hashlib
 import ipaddress
 import json
 import tomllib
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .agent_container import hardening, image
 from .models import (
-    BrowserSurfaceProfile,
     DockerProfile,
-    DockerUlimit,
     EnvironmentVariablePolicy,
     HAProxyConfiguration,
     LandlockPathRule,
-    NetworkDnsPolicy,
-    NetworkGatewayProfile,
 )
-from .profiles import LOCKED_DOWN_PROFILE_NAME, get_docker_profile
 
 _IMAGE_REPOSITORY = "sandbox-agent/sandbox-agent"
 _OLLAMA_IMAGE_REPOSITORY = "sandbox-agent/ollama-sidecar"
@@ -91,53 +87,9 @@ _SUPPORTED_CAPABILITIES = {
     _SHELL_ACCESS_CAPABILITY,
 }
 _HASH_LENGTH = 16
-_MCP_PACKAGE = "mcp==1.28.1"
-_OPENAI_PACKAGE = "openai==2.45.0"
-_OPENAI_AGENTS_PACKAGE = "openai-agents==0.18.2"
-_CLAUDE_AGENT_SDK_PACKAGE = "claude-agent-sdk==0.2.120"
-_ANTHROPIC_PACKAGE = "anthropic==0.116.0"
-_BEEAI_PACKAGE = "beeai-framework==0.1.81"
-_GOOGLE_ADK_PACKAGE = "google-adk==2.5.0"
-_LANGCHAIN_PACKAGE = "langchain==1.3.14"
-_LANGCHAIN_OPENAI_PACKAGE = "langchain-openai==1.3.5"
-_LANGGRAPH_PACKAGE = "langgraph==1.2.9"
-_MICROSOFT_AGENT_PACKAGE = "agent-framework==1.11.0"
-_CREWAI_PACKAGE = "crewai==1.15.3"
-_LITELLM_PROXY_PACKAGE = "'litellm[proxy]==1.92.0'"
-_PLAYWRIGHT_PACKAGE = "playwright==1.61.0"
-_CREWAI_WRITABLE_TMPFS_OPTIONS = (
-    "/tmp/sandbox-home:rw,nosuid,nodev,noexec,size=64m,uid=1000,gid=1000,mode=700",
-    "/tmp/sandbox-cache:rw,nosuid,nodev,noexec,size=64m,uid=1000,gid=1000,mode=700",
-    "/tmp/sandbox-config:rw,nosuid,nodev,noexec,size=64m,uid=1000,gid=1000,mode=700",
-    "/tmp/sandbox-runtime:rw,nosuid,nodev,noexec,size=16m,uid=1000,gid=1000,mode=700",
-)
-_PROBE_PACKAGES = (
-    "paramiko==5.0.0",
-    "pillow==12.3.0",
-    "pymysql==1.2.0",
-)
-_PLAYWRIGHT_BROWSERS_PATH = "/ms-playwright"
 _OPENAI_API_KEY_ENVIRONMENT_VARIABLE = "OPENAI_API_KEY"
 _ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE = "ANTHROPIC_API_KEY"
-_PROCESS_SPAWN_POLICY_ENVIRONMENT_VARIABLE = "SANDBOX_DENY_PROCESS_SPAWN"
-_OPENAI_ALLOWED_DOMAIN = ".openai.com"
-_ANTHROPIC_ALLOWED_DOMAIN = ".anthropic.com"
-_GATEWAY_IMAGE_NAME = "ubuntu/squid:latest"
-_GATEWAY_PROXY_HOST = "egress-gateway"
-_GATEWAY_PROXY_PORT = 3128
 _DEFAULT_HAPROXY_BACKEND_HOST = "host.docker.internal"
-_NO_PROXY_HOSTS = (
-    "127.0.0.1",
-    "localhost",
-    "169.254.169.254",
-    "metadata.google.internal",
-)
-_BLOCKED_HOSTNAMES = (
-    "host.docker.internal",
-    "gateway.docker.internal",
-    "kubernetes.docker.internal",
-    "metadata.google.internal",
-)
 
 
 @dataclass(frozen=True)
@@ -349,116 +301,10 @@ def resolve_ollama_image_name(models: tuple[str, ...]) -> str:
 
 def resolve_profile(spec: SandboxSpec) -> DockerProfile:
     """Resolve a low-level Docker profile from a high-level sandbox spec."""
-    base_profile = get_docker_profile(LOCKED_DOWN_PROFILE_NAME)
-    network_gateway = None
-    network_dns_policy = None
-    container_run_options = base_profile.container_run_options
-    environment = base_profile.environment
-    landlock_rules = base_profile.landlock_rules
-    pids_limit = base_profile.pids_limit
-    memory = base_profile.memory
-    memory_swap = base_profile.memory_swap
-    shm_size = base_profile.shm_size
-    ulimits = base_profile.ulimits
-    browser_surface = base_profile.browser_surface
-    if spec.has_capability(_NETWORK_CAPABILITY):
-        network_gateway = NetworkGatewayProfile(
-            image_name=_GATEWAY_IMAGE_NAME,
-            proxy_host=_GATEWAY_PROXY_HOST,
-            proxy_port=_GATEWAY_PROXY_PORT,
-            allowed_domains=_resolve_allowed_domains(spec),
-            allowed_ip_addresses=spec.allowed_ip_addresses,
-            no_proxy_hosts=_NO_PROXY_HOSTS,
-        )
-        network_dns_policy = NetworkDnsPolicy(blocked_hostnames=_BLOCKED_HOSTNAMES)
-        container_run_options = _without_docker_network_none(container_run_options)
-
-    if _has_openai_family_capability(spec):
-        environment = _without_environment_policy(
-            environment,
-            _OPENAI_API_KEY_ENVIRONMENT_VARIABLE,
-        )
-    if _has_anthropic_family_capability(spec):
-        environment = _without_environment_policy(
-            environment,
-            _ANTHROPIC_API_KEY_ENVIRONMENT_VARIABLE,
-        )
-
-    if spec.has_capability(_SHELL_ACCESS_CAPABILITY) or spec.has_capability(
-        _ANTHROPIC_CLAUDE_CAPABILITY
-    ):
-        environment = _replace_environment_policy(
-            environment,
-            _PROCESS_SPAWN_POLICY_ENVIRONMENT_VARIABLE,
-            "0",
-        )
-
-    if spec.has_capability(_CREWAI_CAPABILITY):
-        environment = _append_environment_policy(
-            environment,
-            "CREWAI_TRACING_ENABLED",
-            "false",
-        )
-        environment = _append_environment_policy(
-            environment,
-            "OTEL_SDK_DISABLED",
-            "true",
-        )
-        for tmpfs_option in _CREWAI_WRITABLE_TMPFS_OPTIONS:
-            container_run_options = _append_tmpfs_option(
-                container_run_options,
-                tmpfs_option,
-            )
-
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
-        browser_surface = BrowserSurfaceProfile()
-        environment = _append_environment_policy(
-            environment,
-            "PLAYWRIGHT_BROWSERS_PATH",
-            _PLAYWRIGHT_BROWSERS_PATH,
-        )
-        landlock_rules = _append_landlock_rule(
-            landlock_rules,
-            _PLAYWRIGHT_BROWSERS_PATH,
-            "rx",
-        )
-        container_run_options = _replace_tmpfs_option(
-            container_run_options,
-            "/tmp",
-            "/tmp:rw,nosuid,nodev,noexec,size=512m",
-        )
-        container_run_options = _replace_tmpfs_option(
-            container_run_options,
-            "/sandbox-work",
-            "/sandbox-work:rw,nosuid,nodev,noexec,size=128m",
-        )
-        pids_limit = 512
-        memory = "2g"
-        memory_swap = "2g"
-        shm_size = "1g"
-        ulimits = (
-            DockerUlimit("nofile", 4096, 4096),
-            DockerUlimit("nproc", 512, 512),
-            DockerUlimit("fsize", 52428800, 52428800),
-        )
-
-    return replace(
-        base_profile,
-        name=f"sandbox-spec-{spec.image_tag}",
-        description="Generated hardened profile for the sandbox spec.",
+    return hardening.resolve_profile(
+        spec,
         image_name=spec.image_name,
-        image_build_arguments=(),
-        container_run_options=container_run_options,
-        network_gateway=network_gateway,
-        network_dns_policy=network_dns_policy,
-        environment=environment,
-        landlock_rules=landlock_rules,
-        pids_limit=pids_limit,
-        memory=memory,
-        memory_swap=memory_swap,
-        shm_size=shm_size,
-        ulimits=ulimits,
-        browser_surface=browser_surface,
+        image_tag=spec.image_tag,
     )
 
 
@@ -467,88 +313,15 @@ def generate_dockerfile(
     include_probe_dependencies: bool = False,
 ) -> str:
     """Generate the Dockerfile needed by the sandbox spec."""
-    package_install_command = _build_python_package_install_command(
+    return image.generate_dockerfile(
         spec,
         include_probe_dependencies=include_probe_dependencies,
     )
-    return f"""FROM python:3.12-slim
-
-WORKDIR /opt/sandbox-agent
-
-RUN useradd --create-home --shell /usr/sbin/nologin sandbox
-
-COPY src/docker_sandbox/dockerfile/runtime_sitecustomize.py \\
-    /tmp/runtime_sitecustomize.py
-COPY src/docker_sandbox/dockerfile/remove_python_packaging.py \\
-    /tmp/remove_python_packaging.py
-ENV PLAYWRIGHT_BROWSERS_PATH={_PLAYWRIGHT_BROWSERS_PATH}
-{package_install_command}
-
-RUN rm -f \\
-        /usr/local/bin/pip \\
-        /usr/local/bin/pip3 \\
-        /usr/local/bin/pip3.* \\
-        /usr/local/bin/wheel \\
-        /usr/bin/apt \\
-        /usr/bin/apt-get \\
-        /usr/bin/bash \\
-        /usr/bin/busctl \\
-        /usr/bin/dbus-send \\
-        /usr/bin/dpkg \\
-        /usr/bin/dpkg-query \\
-        /usr/bin/findmnt \\
-        /usr/bin/git \\
-        /usr/bin/gpg \\
-        /usr/bin/gpg-connect-agent \\
-        /usr/bin/gpgconf \\
-        /usr/bin/journalctl \\
-        /usr/bin/loginctl \\
-        /usr/bin/mount \\
-        /usr/bin/nice \\
-        /usr/bin/nohup \\
-        /usr/bin/nsenter \\
-        /usr/bin/perl \\
-        /usr/bin/renice \\
-        /usr/bin/scp \\
-        /usr/bin/sftp \\
-        /usr/bin/setsid \\
-        /usr/bin/ssh \\
-        /usr/bin/ssh-add \\
-        /usr/bin/su \\
-        /usr/bin/systemd-run \\
-        /usr/bin/systemctl \\
-        /usr/bin/umount \\
-        /usr/bin/unshare \\
-        /usr/sbin/service \\
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
-
-RUN python /tmp/remove_python_packaging.py \\
-    && rm -f \\
-        /usr/local/bin/pip \\
-        /usr/local/bin/pip3 \\
-        /usr/local/bin/pip3.* \\
-        /usr/local/bin/wheel \\
-        /usr/bin/pip \\
-        /usr/bin/pip3 \\
-        /usr/bin/pip3.* \\
-        /usr/bin/wheel
-
-RUN rm -f \\
-        /usr/bin/gdbus \\
-        /usr/bin/qdbus \\
-        /usr/bin/wmctrl \\
-        /usr/bin/xdotool \\
-    && rm -rf \\
-        /var/cache/apt \\
-        /var/lib/apt \\
-        /var/lib/dpkg \\
-        /var/log/apt
-"""
 
 
 def resolved_profile_data(profile: DockerProfile) -> dict[str, Any]:
     """Convert a resolved profile to JSON-safe diagnostic data."""
-    return _json_safe(asdict(profile))
+    return hardening.resolved_profile_data(profile)
 
 
 def _read_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
@@ -892,92 +665,32 @@ def _find_duplicate_ports(ports: tuple[int, ...]) -> tuple[int, ...]:
 
 
 def _without_docker_network_none(options: tuple[str, ...]) -> tuple[str, ...]:
-    filtered_options = []
-    skip_next = False
-    for index, option in enumerate(options):
-        if skip_next:
-            skip_next = False
-            continue
-
-        if option == "--network" and index + 1 < len(options):
-            if options[index + 1] == "none":
-                skip_next = True
-                continue
-
-        if option == "--network=none":
-            continue
-
-        filtered_options.append(option)
-
-    return tuple(filtered_options)
+    return hardening.without_docker_network_none(options)
 
 
 def _resolve_allowed_domains(spec: SandboxSpec) -> tuple[str, ...]:
-    domains = list(spec.allowed_domains)
-    if _has_openai_family_capability(spec):
-        domains.append(_OPENAI_ALLOWED_DOMAIN)
-    if _has_anthropic_family_capability(spec):
-        domains.append(_ANTHROPIC_ALLOWED_DOMAIN)
-
-    return tuple(dict.fromkeys(domains))
+    return hardening.resolve_allowed_domains(
+        spec.allowed_domains,
+        include_openai=_has_openai_family_capability(spec),
+        include_anthropic=_has_anthropic_family_capability(spec),
+    )
 
 
 def _build_python_package_install_command(
     spec: SandboxSpec,
     include_probe_dependencies: bool = False,
 ) -> str:
-    packages = []
-    if spec.has_capability(_OPENAI_CAPABILITY):
-        packages.append(_OPENAI_PACKAGE)
-    if spec.has_capability(_OPENAI_AGENTS_CAPABILITY):
-        packages.append(_OPENAI_AGENTS_PACKAGE)
-    if spec.has_capability(_MCP_CLIENT_CAPABILITY):
-        packages.append(_MCP_PACKAGE)
-    if spec.has_capability(_ANTHROPIC_CLAUDE_CAPABILITY):
-        packages.append(_CLAUDE_AGENT_SDK_PACKAGE)
-    if spec.has_capability(_ANTHROPIC_PYTHON_CAPABILITY):
-        packages.append(_ANTHROPIC_PACKAGE)
-    if spec.has_capability(_BEEAI_CAPABILITY):
-        packages.append(_BEEAI_PACKAGE)
-        packages.append(_LITELLM_PROXY_PACKAGE)
-    if spec.has_capability(_GOOGLE_ADK_CAPABILITY):
-        packages.append(_GOOGLE_ADK_PACKAGE)
-        packages.append(_LITELLM_PROXY_PACKAGE)
-    if spec.has_capability(_LANGCHAIN_CAPABILITY):
-        packages.append(_LANGCHAIN_PACKAGE)
-        packages.append(_LANGCHAIN_OPENAI_PACKAGE)
-    if spec.has_capability(_LANGGRAPH_CAPABILITY):
-        packages.append(_LANGGRAPH_PACKAGE)
-        packages.append(_LANGCHAIN_OPENAI_PACKAGE)
-    if spec.has_capability(_MICROSOFT_AGENT_CAPABILITY):
-        packages.append(_MICROSOFT_AGENT_PACKAGE)
-    if spec.has_capability(_CREWAI_CAPABILITY):
-        packages.append(_CREWAI_PACKAGE)
-    if spec.has_capability(_OTTO_AGENT_CAPABILITY):
-        packages.append(_OPENAI_PACKAGE)
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
-        packages.append(_PLAYWRIGHT_PACKAGE)
-    if include_probe_dependencies:
-        packages.extend(_PROBE_PACKAGES)
-
-    if not packages:
-        return ""
-
-    package_arguments = " ".join(packages)
-    install_command = f"\nRUN python -m pip install --no-cache-dir {package_arguments}"
-    if spec.has_capability(_PLAYWRIGHT_CHROMIUM_CAPABILITY):
-        install_command += (
-            " \\\n    && python -m playwright install --with-deps chromium"
-        )
-
-    return f"{install_command}\n"
+    return image.build_python_package_install_command(
+        spec,
+        include_probe_dependencies=include_probe_dependencies,
+    )
 
 
 def _without_environment_policy(
     policies: tuple[EnvironmentVariablePolicy, ...],
     name: str,
 ) -> tuple[EnvironmentVariablePolicy, ...]:
-    return tuple(policy for policy in policies if policy.name != name)
+    return hardening.without_environment_policy(policies, name)
 
 
 def _replace_environment_policy(
@@ -985,10 +698,7 @@ def _replace_environment_policy(
     name: str,
     value: str,
 ) -> tuple[EnvironmentVariablePolicy, ...]:
-    return tuple(
-        EnvironmentVariablePolicy(policy.name, value) if policy.name == name else policy
-        for policy in policies
-    )
+    return hardening.replace_environment_policy(policies, name, value)
 
 
 def _append_environment_policy(
@@ -996,10 +706,7 @@ def _append_environment_policy(
     name: str,
     value: str,
 ) -> tuple[EnvironmentVariablePolicy, ...]:
-    if any(policy.name == name for policy in policies):
-        return _replace_environment_policy(policies, name, value)
-
-    return (*policies, EnvironmentVariablePolicy(name, value))
+    return hardening.append_environment_policy(policies, name, value)
 
 
 def _append_landlock_rule(
@@ -1007,10 +714,7 @@ def _append_landlock_rule(
     path: str,
     access: str,
 ) -> tuple[LandlockPathRule, ...]:
-    if any(getattr(rule, "path", None) == path for rule in rules):
-        return rules
-
-    return (*rules, LandlockPathRule(path, access))
+    return hardening.append_landlock_rule(rules, path, access)
 
 
 def _replace_tmpfs_option(
@@ -1018,60 +722,19 @@ def _replace_tmpfs_option(
     mount_path: str,
     replacement: str,
 ) -> tuple[str, ...]:
-    replaced_options = []
-    skip_next = False
-    for index, option in enumerate(options):
-        if skip_next:
-            skip_next = False
-            continue
-
-        if option == "--tmpfs" and index + 1 < len(options):
-            tmpfs_value = options[index + 1]
-            if tmpfs_value.startswith(f"{mount_path}:"):
-                replaced_options.extend(["--tmpfs", replacement])
-                skip_next = True
-                continue
-
-        replaced_options.append(option)
-
-    return tuple(replaced_options)
+    return hardening.replace_tmpfs_option(options, mount_path, replacement)
 
 
 def _append_tmpfs_option(
     options: tuple[str, ...],
     tmpfs_option: str,
 ) -> tuple[str, ...]:
-    if tmpfs_option in options:
-        return options
-
-    return (*options, "--tmpfs", tmpfs_option)
+    return hardening.append_tmpfs_option(options, tmpfs_option)
 
 
 def _has_openai_family_capability(spec: SandboxSpec) -> bool:
-    return (
-        spec.has_capability(_OPENAI_CAPABILITY)
-        or spec.has_capability(_OPENAI_AGENTS_CAPABILITY)
-        or spec.has_capability(_BEEAI_CAPABILITY)
-        or spec.has_capability(_GOOGLE_ADK_CAPABILITY)
-        or spec.has_capability(_LANGCHAIN_CAPABILITY)
-        or spec.has_capability(_LANGGRAPH_CAPABILITY)
-        or spec.has_capability(_MICROSOFT_AGENT_CAPABILITY)
-        or spec.has_capability(_CREWAI_CAPABILITY)
-        or spec.has_capability(_OTTO_AGENT_CAPABILITY)
-    )
+    return hardening.has_openai_family_capability(spec)
 
 
 def _has_anthropic_family_capability(spec: SandboxSpec) -> bool:
-    return spec.has_capability(_ANTHROPIC_CLAUDE_CAPABILITY) or spec.has_capability(
-        _ANTHROPIC_PYTHON_CAPABILITY
-    )
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _json_safe(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(item) for item in value]
-    if isinstance(value, Path):
-        return str(value)
-    return value
+    return hardening.has_anthropic_family_capability(spec)
