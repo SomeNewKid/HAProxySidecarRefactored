@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from docker_sandbox.models import (
     DockerConfiguration,
     HAProxyConfiguration,
@@ -16,20 +18,24 @@ from docker_sandbox.profiles import MINIMAL_PROFILE_NAME, get_docker_profile
 from docker_sandbox.sandbox_container import (
     _build_code_sidecar_cleanup_commands,
     _build_code_sidecar_container_name,
+    _build_code_sidecar_health_probe_script,
     _build_code_sidecar_image_build_command,
     _build_code_sidecar_image_inspect_command,
     _build_code_sidecar_run_command,
     _build_container_environment,
     _build_docker_run_command,
     _build_haproxy_sidecar_cleanup_commands,
+    _build_haproxy_sidecar_config_probe_command,
     _build_haproxy_sidecar_container_name,
     _build_haproxy_sidecar_network_connect_command,
+    _build_haproxy_sidecar_process_probe_command,
     _build_haproxy_sidecar_run_command,
     _build_jina_reader_cleanup_commands,
     _build_jina_reader_container_name,
     _build_jina_reader_run_command,
     _build_mcp_sidecar_cleanup_commands,
     _build_mcp_sidecar_container_name,
+    _build_mcp_sidecar_health_probe_script,
     _build_mcp_sidecar_image_build_command,
     _build_mcp_sidecar_image_inspect_command,
     _build_mcp_sidecar_run_command,
@@ -45,8 +51,12 @@ from docker_sandbox.sandbox_container import (
     _start_haproxy_sidecar,
     _start_jina_reader,
     _start_mcp_sidecar,
+    _start_network_gateway,
     _start_ollama_sidecar,
+    _wait_for_code_sidecar_ready,
+    _wait_for_haproxy_sidecar_ready,
     _wait_for_jina_reader_ready,
+    _wait_for_mcp_sidecar_ready,
     _wait_for_ollama_sidecar_ready,
     _write_code_sidecar_logs,
     _write_haproxy_configuration,
@@ -518,6 +528,251 @@ def test_start_mcp_sidecar_rebuilds_image_before_running(
     assert [result["command"] for result in start_results] == expected_commands
 
 
+def test_mcp_sidecar_health_probe_script_targets_health_route() -> None:
+    """Verify the MCP sidecar readiness probe uses the health endpoint."""
+    script = _build_mcp_sidecar_health_probe_script()
+
+    assert "http://mcp-sidecar:8000/health" in script
+    assert "data.get('status') != 'ok'" in script
+
+
+def test_wait_for_mcp_sidecar_ready_persists_health_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify MCP readiness writes health probe results."""
+    configuration = _create_network_configuration()
+    attempts = []
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        attempts.append(command)
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="ready\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _wait_for_mcp_sidecar_ready(
+        configuration,
+        tmp_path,
+        "sandbox-agent-net-1",
+        "mcp-sidecar-1",
+    )
+
+    readiness_results = json.loads(
+        (tmp_path / "mcp-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["container_name"] == "mcp-sidecar-1"
+    assert readiness_results["health_url"] == "http://mcp-sidecar:8000/health"
+    assert readiness_results["ready"] is True
+    assert readiness_results["phases"][0]["name"] == "health"
+    assert readiness_results["phases"][0]["success"] is True
+    assert readiness_results["phases"][0]["attempts"][0]["command"] == attempts[0]
+
+
+def test_wait_for_mcp_sidecar_ready_raises_when_health_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify MCP readiness stops orchestration when health does not pass."""
+    configuration = _create_network_configuration()
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = check
+        _ = capture_output
+        _ = text
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout="",
+            stderr="connection refused\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="MCP sidecar did not become ready"):
+        _wait_for_mcp_sidecar_ready(
+            configuration,
+            tmp_path,
+            "sandbox-agent-net-1",
+            "mcp-sidecar-1",
+            intervals_seconds=(0.0,),
+        )
+
+    readiness_results = json.loads(
+        (tmp_path / "mcp-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["ready"] is False
+    assert readiness_results["phases"][0]["attempts"][0]["stderr"] == (
+        "connection refused\n"
+    )
+
+
+def test_start_network_gateway_raises_when_squid_check_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify gateway startup stops when Squid rejects its configuration."""
+    configuration = _create_network_configuration()
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        if command[1] == "inspect":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="172.18.0.2\n",
+                stderr="",
+            )
+        if command[1] == "exec":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=1,
+                stdout="",
+                stderr="squid.conf is invalid\n",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="ok\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Squid gateway readiness check failed"):
+        _start_network_gateway(
+            configuration,
+            tmp_path,
+            "sandbox-agent-net-1",
+            "sandbox-agent-gateway-1",
+        )
+
+    start_results = json.loads((tmp_path / "gateway-start-results.json").read_text())
+    assert start_results[-2]["returncode"] == 1
+    assert start_results[-2]["stderr"] == "squid.conf is invalid\n"
+    assert start_results[-1]["gateway_ip_address"] == "172.18.0.2"
+
+
+def test_code_sidecar_health_probe_script_targets_health_route() -> None:
+    """Verify the Code sidecar readiness probe uses the health endpoint."""
+    script = _build_code_sidecar_health_probe_script()
+
+    assert "http://code-sidecar:8090/health" in script
+    assert "data.get('status') != 'ok'" in script
+
+
+def test_wait_for_code_sidecar_ready_persists_health_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Code readiness writes health probe results."""
+    configuration = _create_code_execution_configuration()
+    attempts = []
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        attempts.append(command)
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="ready\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _wait_for_code_sidecar_ready(
+        configuration,
+        tmp_path,
+        "sandbox-agent-net-1",
+        "code-sidecar-1",
+    )
+
+    readiness_results = json.loads(
+        (tmp_path / "code-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["container_name"] == "code-sidecar-1"
+    assert readiness_results["health_url"] == "http://code-sidecar:8090/health"
+    assert readiness_results["ready"] is True
+    assert readiness_results["phases"][0]["name"] == "health"
+    assert readiness_results["phases"][0]["success"] is True
+    assert readiness_results["phases"][0]["attempts"][0]["command"] == attempts[0]
+
+
+def test_wait_for_code_sidecar_ready_raises_when_health_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify Code readiness stops orchestration when health does not pass."""
+    configuration = _create_code_execution_configuration()
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = check
+        _ = capture_output
+        _ = text
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout="",
+            stderr="connection refused\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="Code sidecar did not become ready"):
+        _wait_for_code_sidecar_ready(
+            configuration,
+            tmp_path,
+            "sandbox-agent-net-1",
+            "code-sidecar-1",
+            intervals_seconds=(0.0,),
+        )
+
+    readiness_results = json.loads(
+        (tmp_path / "code-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["ready"] is False
+    assert readiness_results["phases"][0]["attempts"][0]["stderr"] == (
+        "connection refused\n"
+    )
+
+
 def test_code_sidecar_image_commands_use_static_dockerfile() -> None:
     """Verify the code sidecar image commands target the static Dockerfile."""
     configuration = _create_network_configuration()
@@ -617,6 +872,178 @@ def test_write_haproxy_configuration_writes_run_artifact(tmp_path: Path) -> None
     config = (tmp_path / "haproxy.cfg").read_text(encoding="utf-8")
     assert "bind *:3306" in config
     assert "server host host.docker.internal:3306" in config
+
+
+def test_haproxy_sidecar_process_probe_command_uses_pidof() -> None:
+    """Verify HAProxy process readiness uses a self-contained container command."""
+    command = _build_haproxy_sidecar_process_probe_command("haproxy-sidecar-1")
+
+    assert command == [
+        "docker",
+        "exec",
+        "haproxy-sidecar-1",
+        "pidof",
+        "haproxy",
+    ]
+
+
+def test_haproxy_sidecar_config_probe_command_checks_mounted_config() -> None:
+    """Verify HAProxy config readiness checks the mounted runtime config."""
+    command = _build_haproxy_sidecar_config_probe_command("haproxy-sidecar-1")
+
+    assert command == [
+        "docker",
+        "exec",
+        "haproxy-sidecar-1",
+        "haproxy",
+        "-c",
+        "-f",
+        "/usr/local/etc/haproxy/haproxy.cfg",
+    ]
+
+
+def test_wait_for_haproxy_sidecar_ready_persists_readiness_results(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify HAProxy readiness records process and config validation results."""
+    configuration = _create_haproxy_configuration()
+    calls = []
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        assert check is False
+        assert capture_output is True
+        assert text is True
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="1\n" if command[-2:] == ["pidof", "haproxy"] else "",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    _wait_for_haproxy_sidecar_ready(
+        configuration,
+        tmp_path,
+        "haproxy-sidecar-1",
+    )
+
+    readiness_results = json.loads(
+        (tmp_path / "haproxy-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["container_name"] == "haproxy-sidecar-1"
+    assert (
+        readiness_results["configuration_path"] == "/usr/local/etc/haproxy/haproxy.cfg"
+    )
+    assert readiness_results["ready"] is True
+    assert [phase["name"] for phase in readiness_results["phases"]] == [
+        "process",
+        "configuration",
+    ]
+    assert [phase["attempts"][0]["command"] for phase in readiness_results["phases"]]
+    assert calls == [
+        _build_haproxy_sidecar_process_probe_command("haproxy-sidecar-1"),
+        _build_haproxy_sidecar_config_probe_command("haproxy-sidecar-1"),
+    ]
+
+
+def test_wait_for_haproxy_sidecar_ready_raises_when_process_check_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify HAProxy readiness stops when the process is not running."""
+    configuration = _create_haproxy_configuration()
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = check
+        _ = capture_output
+        _ = text
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=1,
+            stdout="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="HAProxy sidecar did not become ready"):
+        _wait_for_haproxy_sidecar_ready(
+            configuration,
+            tmp_path,
+            "haproxy-sidecar-1",
+            intervals_seconds=(0.0,),
+        )
+
+    readiness_results = json.loads(
+        (tmp_path / "haproxy-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["ready"] is False
+    assert [phase["name"] for phase in readiness_results["phases"]] == ["process"]
+
+
+def test_wait_for_haproxy_sidecar_ready_raises_when_config_check_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Verify HAProxy readiness stops when config validation fails."""
+    configuration = _create_haproxy_configuration()
+
+    def fake_run(
+        command: list[str],
+        check: bool,
+        capture_output: bool,
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        _ = check
+        _ = capture_output
+        _ = text
+        returncode = 0
+        stderr = ""
+        if command[3] == "haproxy":
+            returncode = 1
+            stderr = "Fatal errors found in configuration.\n"
+
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=returncode,
+            stdout="1\n" if command[3] == "pidof" else "",
+            stderr=stderr,
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    with pytest.raises(RuntimeError, match="HAProxy sidecar did not become ready"):
+        _wait_for_haproxy_sidecar_ready(
+            configuration,
+            tmp_path,
+            "haproxy-sidecar-1",
+            intervals_seconds=(0.0,),
+        )
+
+    readiness_results = json.loads(
+        (tmp_path / "haproxy-sidecar-readiness-results.json").read_text()
+    )
+    assert readiness_results["ready"] is False
+    assert [phase["name"] for phase in readiness_results["phases"]] == [
+        "process",
+        "configuration",
+    ]
+    assert readiness_results["phases"][1]["attempts"][0]["stderr"] == (
+        "Fatal errors found in configuration.\n"
+    )
 
 
 def test_write_ollama_sidecar_dockerfile_uses_image_tag_directory(
@@ -736,10 +1163,10 @@ def test_agent_environment_omits_mcp_sidecar_url_without_network() -> None:
     assert "MCP_SIDECAR_URL" not in environment
 
 
-def test_agent_environment_includes_ollama_openai_compatible_urls(
+def test_agent_environment_includes_ollama_settings_without_replacing_openai(
     tmp_path: Path,
 ) -> None:
-    """Verify Ollama runs receive native and OpenAI-compatible local URLs."""
+    """Verify Ollama runs keep hosted OpenAI settings available."""
     configuration = _create_ollama_configuration(tmp_path)
 
     environment = _build_container_environment(
@@ -749,8 +1176,8 @@ def test_agent_environment_includes_ollama_openai_compatible_urls(
 
     assert environment["OLLAMA_BASE_URL"] == "http://ollama-sidecar:11434"
     assert environment["OLLAMA_MODEL"] == "phi4-mini:latest"
-    assert environment["OPENAI_BASE_URL"] == "http://ollama-sidecar:11434/v1"
-    assert environment["OPENAI_API_KEY"] == "ollama"
+    assert "OPENAI_BASE_URL" not in environment
+    assert environment["OPENAI_API_KEY"] == "host-secret"
     assert "ollama-sidecar" in environment["NO_PROXY"].split(",")
     assert "ollama-sidecar" in environment["no_proxy"].split(",")
 
@@ -774,7 +1201,7 @@ def test_agent_docker_run_command_includes_mcp_sidecar_url() -> None:
 def test_agent_docker_run_command_includes_ollama_environment(
     tmp_path: Path,
 ) -> None:
-    """Verify Ollama agent Docker env uses local model endpoint settings."""
+    """Verify Ollama agent Docker env does not replace hosted OpenAI settings."""
     configuration = _create_ollama_configuration(tmp_path)
 
     command = _build_docker_run_command(
@@ -790,9 +1217,9 @@ def test_agent_docker_run_command_includes_ollama_environment(
     env_values = _option_values(command, "--env")
     assert "OLLAMA_BASE_URL=http://ollama-sidecar:11434" in env_values
     assert "OLLAMA_MODEL=phi4-mini:latest" in env_values
-    assert "OPENAI_BASE_URL=http://ollama-sidecar:11434/v1" in env_values
-    assert "OPENAI_API_KEY=ollama" in env_values
-    assert "OPENAI_API_KEY" not in env_values
+    assert not any(value.startswith("OPENAI_BASE_URL=") for value in env_values)
+    assert "OPENAI_API_KEY" in env_values
+    assert "OPENAI_API_KEY=ollama" not in env_values
     no_proxy_value = next(
         value for value in env_values if value.startswith("NO_PROXY=")
     )
@@ -1501,10 +1928,19 @@ def _create_haproxy_configuration(
 def _create_ollama_configuration(base_directory: Path) -> DockerConfiguration:
     configuration = _create_network_configuration()
     models = ("phi4-mini:latest", "qwen3:4b")
+    profile = replace(
+        configuration.profile,
+        environment=tuple(
+            policy
+            for policy in configuration.profile.environment
+            if policy.name != "OPENAI_API_KEY"
+        ),
+    )
     return replace(
         configuration,
         base_directory=base_directory,
-        enabled_capabilities=frozenset({"ollama"}),
+        enabled_capabilities=frozenset({"openai_agents", "ollama"}),
+        profile=profile,
         ollama_models=models,
         ollama_image_name=resolve_ollama_image_name(models),
     )

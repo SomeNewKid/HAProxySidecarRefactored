@@ -542,6 +542,15 @@ def test_mcp_server_exposes_code_execution_tool() -> None:
     assert "run_python_script" in tool_names
 
 
+def test_mcp_server_exposes_health_route() -> None:
+    """Verify the sidecar exposes a generic HTTP health route."""
+    server = create_mcp_server()
+    app = server.streamable_http_app()
+    route_paths = {getattr(route, "path", None) for route in app.routes}
+
+    assert "/health" in route_paths
+
+
 def test_mcp_server_exposes_nothing_by_default(monkeypatch) -> None:
     """Verify MCP tools and resources are disabled unless explicitly configured."""
     monkeypatch.delenv("MCP_SIDECAR_EXPOSURE_PATH", raising=False)

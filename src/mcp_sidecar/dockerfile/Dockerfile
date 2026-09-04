@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1
 
 RUN useradd --create-home --shell /usr/sbin/nologin mcp-sidecar
 
-RUN python -m pip install --no-cache-dir mcp pymysql
+RUN python -m pip install --no-cache-dir mcp==1.28.1 pymysql==1.2.0
 
 COPY src/mcp_sidecar ./mcp_sidecar
 

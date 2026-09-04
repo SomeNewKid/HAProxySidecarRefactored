@@ -55,6 +55,7 @@ _MCP_SIDECAR_STDERR_FILE_NAME = "mcp-sidecar-stderr.txt"
 _MCP_SIDECAR_METADATA_FILE_NAME = "mcp-sidecar-metadata.json"
 _MCP_SIDECAR_TOOL_CALLS_FILE_NAME = "mcp-sidecar-tool-calls.jsonl"
 _MCP_SIDECAR_EXPOSURE_FILE_NAME = "mcp-sidecar-exposure.json"
+_MCP_SIDECAR_READINESS_RESULTS_FILE_NAME = "mcp-sidecar-readiness-results.json"
 _JINA_READER_START_RESULTS_FILE_NAME = "jina-reader-start-results.json"
 _JINA_READER_LOG_FILE_NAME = "jina-reader-logs.json"
 _JINA_READER_STDOUT_FILE_NAME = "jina-reader-stdout.txt"
@@ -66,12 +67,14 @@ _CODE_SIDECAR_LOG_FILE_NAME = "code-sidecar-logs.json"
 _CODE_SIDECAR_STDOUT_FILE_NAME = "code-sidecar-stdout.txt"
 _CODE_SIDECAR_STDERR_FILE_NAME = "code-sidecar-stderr.txt"
 _CODE_SIDECAR_METADATA_FILE_NAME = "code-sidecar-metadata.json"
+_CODE_SIDECAR_READINESS_RESULTS_FILE_NAME = "code-sidecar-readiness-results.json"
 _HAPROXY_CONFIGURATION_FILE_NAME = "haproxy.cfg"
 _HAPROXY_SIDECAR_START_RESULTS_FILE_NAME = "haproxy-sidecar-start-results.json"
 _HAPROXY_SIDECAR_LOG_FILE_NAME = "haproxy-sidecar-logs.json"
 _HAPROXY_SIDECAR_STDOUT_FILE_NAME = "haproxy-sidecar-stdout.txt"
 _HAPROXY_SIDECAR_STDERR_FILE_NAME = "haproxy-sidecar-stderr.txt"
 _HAPROXY_SIDECAR_METADATA_FILE_NAME = "haproxy-sidecar-metadata.json"
+_HAPROXY_SIDECAR_READINESS_RESULTS_FILE_NAME = "haproxy-sidecar-readiness-results.json"
 _OLLAMA_SIDECAR_START_RESULTS_FILE_NAME = "ollama-sidecar-start-results.json"
 _OLLAMA_SIDECAR_LOG_FILE_NAME = "ollama-sidecar-logs.json"
 _OLLAMA_SIDECAR_STDOUT_FILE_NAME = "ollama-sidecar-stdout.txt"
@@ -112,6 +115,7 @@ _MCP_SIDECAR_AUDIT_LOG_PATH_ENVIRONMENT_VARIABLE = "MCP_SIDECAR_AUDIT_LOG_PATH"
 _MCP_SIDECAR_EXPOSURE_PATH_ENVIRONMENT_VARIABLE = "MCP_SIDECAR_EXPOSURE_PATH"
 _MCP_SIDECAR_OUTPUT_DIRECTORY = "/mcp-sidecar-output"
 _MCP_SIDECAR_CONFIG_DIRECTORY = "/mcp-sidecar-config"
+_MCP_SIDECAR_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
 _MARIADB_HOST_ENVIRONMENT_VARIABLE = "MARIADB_HOST"
 _MARIADB_PORT_ENVIRONMENT_VARIABLE = "MARIADB_PORT"
 _MARIADB_DATABASE_ENVIRONMENT_VARIABLE = "MARIADB_DATABASE"
@@ -119,7 +123,6 @@ _MARIADB_CREDENTIALS_ENVIRONMENT_VARIABLE = "SANDBOX_TESTER_MARIADB_CREDENTIALS"
 _MARIADB_DATABASE_NAME = "agent_allowed"
 _MARIADB_DEFAULT_PORT = 3306
 _OPENAI_API_KEY_ENVIRONMENT_VARIABLE = "OPENAI_API_KEY"
-_OPENAI_BASE_URL_ENVIRONMENT_VARIABLE = "OPENAI_BASE_URL"
 _JINA_READER_IMAGE_NAME = "ghcr.io/jina-ai/reader:oss"
 _JINA_READER_CONTAINER_NAME_PREFIX = "jina-reader"
 _JINA_READER_ALIAS = "jina-reader"
@@ -136,7 +139,6 @@ _OLLAMA_SIDECAR_ALIAS = "ollama-sidecar"
 _OLLAMA_SIDECAR_PORT = 11434
 _OLLAMA_BASE_URL_ENVIRONMENT_VARIABLE = "OLLAMA_BASE_URL"
 _OLLAMA_MODEL_ENVIRONMENT_VARIABLE = "OLLAMA_MODEL"
-_OLLAMA_OPENAI_API_KEY = "ollama"
 _OLLAMA_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
 _CODE_SIDECAR_IMAGE_NAME = "code-sidecar:dev"
 _CODE_SIDECAR_CONTAINER_NAME_PREFIX = "code-sidecar"
@@ -145,10 +147,12 @@ _CODE_SIDECAR_PORT = 8090
 _CODE_SIDECAR_URL_ENVIRONMENT_VARIABLE = "CODE_SIDECAR_URL"
 _CODE_SIDECAR_OUTPUT_DIRECTORY_ENVIRONMENT_VARIABLE = "CODE_SIDECAR_OUTPUT_DIRECTORY"
 _CODE_SIDECAR_OUTPUT_DIRECTORY = "/code-sidecar-output"
+_CODE_SIDECAR_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
 _HAPROXY_IMAGE_NAME = "haproxy:latest"
 _HAPROXY_SIDECAR_CONTAINER_NAME_PREFIX = "haproxy-sidecar"
 _HAPROXY_SIDECAR_ALIAS = "haproxy-sidecar"
 _HAPROXY_CONFIGURATION_PATH = "/usr/local/etc/haproxy/haproxy.cfg"
+_HAPROXY_READINESS_INTERVALS_SECONDS = (0.0, 1.0, 2.0, 4.0, 8.0, 16.0)
 _OLLAMA_BASE_IMAGE_NAME = "ollama/ollama:latest"
 _OLLAMA_GENERATED_DIRECTORY = "ollama-sidecar"
 
@@ -245,10 +249,21 @@ def run_sandbox_container(
         network_name,
         code_sidecar_container_name,
     )
+    _wait_for_code_sidecar_ready(
+        configuration,
+        run_directory,
+        network_name,
+        code_sidecar_container_name,
+    )
     haproxy_sidecar_commands = _start_haproxy_sidecar(
         configuration,
         run_directory,
         network_name,
+        haproxy_sidecar_container_name,
+    )
+    _wait_for_haproxy_sidecar_ready(
+        configuration,
+        run_directory,
         haproxy_sidecar_container_name,
     )
     ollama_sidecar_commands = _start_ollama_sidecar(
@@ -264,6 +279,12 @@ def run_sandbox_container(
         ollama_sidecar_container_name,
     )
     mcp_sidecar_commands = _start_mcp_sidecar(
+        configuration,
+        run_directory,
+        network_name,
+        mcp_sidecar_container_name,
+    )
+    _wait_for_mcp_sidecar_ready(
         configuration,
         run_directory,
         network_name,
@@ -827,8 +848,21 @@ def _start_network_gateway(
         }
     )
     _write_gateway_start_results(run_directory, results)
+    _raise_for_gateway_readiness_failure(results[-2])
 
     return commands, gateway_ip_address
+
+
+def _raise_for_gateway_readiness_failure(result: Mapping[str, object]) -> None:
+    returncode = result.get("returncode")
+    if returncode == 0:
+        return
+
+    stderr = result.get("stderr")
+    if not isinstance(stderr, str) or not stderr.strip():
+        stderr = "Squid readiness check did not return a successful response."
+
+    raise RuntimeError(f"Squid gateway readiness check failed: {stderr.strip()}")
 
 
 def _build_gateway_command_result(
@@ -1064,6 +1098,120 @@ def _build_mcp_sidecar_run_command(
     return command
 
 
+def _wait_for_mcp_sidecar_ready(
+    configuration: DockerConfiguration,
+    run_directory: Path,
+    network_name: str | None,
+    mcp_sidecar_container_name: str | None,
+    intervals_seconds: tuple[float, ...] = _MCP_SIDECAR_READINESS_INTERVALS_SECONDS,
+) -> None:
+    if not _should_start_mcp_sidecar(configuration):
+        return
+
+    if network_name is None or mcp_sidecar_container_name is None:
+        raise RuntimeError("MCP sidecar readiness check requires an internal network.")
+
+    phase = _run_mcp_sidecar_readiness_phase(
+        configuration,
+        network_name,
+        intervals_seconds,
+    )
+    result = {
+        "container_name": mcp_sidecar_container_name,
+        "health_url": f"http://{_MCP_SIDECAR_ALIAS}:{_MCP_SIDECAR_PORT}/health",
+        "ready": bool(phase["success"]),
+        "phases": [phase],
+    }
+    _write_mcp_sidecar_readiness_results(run_directory, result)
+    if not result["ready"]:
+        raise RuntimeError("MCP sidecar did not become ready.")
+
+
+def _run_mcp_sidecar_readiness_phase(
+    configuration: DockerConfiguration,
+    network_name: str,
+    intervals_seconds: tuple[float, ...],
+) -> dict[str, object]:
+    attempts = []
+    for attempt_index, interval_seconds in enumerate(intervals_seconds, start=1):
+        if interval_seconds > 0:
+            time.sleep(interval_seconds)
+
+        command = _build_mcp_sidecar_health_probe_command(
+            configuration,
+            network_name,
+        )
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        success = completed.returncode == 0
+        attempts.append(
+            {
+                "attempt": attempt_index,
+                "wait_seconds": interval_seconds,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "success": success,
+            }
+        )
+        if success:
+            break
+
+    return {
+        "name": "health",
+        "success": bool(attempts and attempts[-1]["success"]),
+        "attempts": attempts,
+    }
+
+
+def _build_mcp_sidecar_health_probe_command(
+    configuration: DockerConfiguration,
+    network_name: str,
+) -> list[str]:
+    return [
+        _DOCKER_EXECUTABLE,
+        "run",
+        "--rm",
+        "--network",
+        network_name,
+        configuration.profile.image_name,
+        "python",
+        "-c",
+        _build_mcp_sidecar_health_probe_script(),
+    ]
+
+
+def _build_mcp_sidecar_health_probe_script() -> str:
+    health_url = f"http://{_MCP_SIDECAR_ALIAS}:{_MCP_SIDECAR_PORT}/health"
+    return (
+        "import json\n"
+        "from urllib.request import urlopen\n"
+        f"with urlopen({health_url!r}, timeout=5) as response:\n"
+        "    status = response.status\n"
+        "    body = response.read()\n"
+        "if status < 200 or status >= 300:\n"
+        "    raise SystemExit(status)\n"
+        "data = json.loads(body.decode('utf-8'))\n"
+        "if data.get('status') != 'ok':\n"
+        "    raise SystemExit(1)\n"
+        "print('ready')\n"
+    )
+
+
+def _write_mcp_sidecar_readiness_results(
+    run_directory: Path,
+    result: dict[str, object],
+) -> None:
+    results_path = run_directory / _MCP_SIDECAR_READINESS_RESULTS_FILE_NAME
+    results_text = json.dumps(result, indent=2)
+    results_path.write_text(f"{results_text}\n", encoding="utf-8")
+
+
 def _build_mcp_sidecar_no_proxy(configuration: DockerConfiguration) -> str:
     hosts = [
         "localhost",
@@ -1230,6 +1378,120 @@ def _start_code_sidecar(
 
     _write_code_sidecar_start_results(run_directory, results)
     return commands
+
+
+def _wait_for_code_sidecar_ready(
+    configuration: DockerConfiguration,
+    run_directory: Path,
+    network_name: str | None,
+    code_sidecar_container_name: str | None,
+    intervals_seconds: tuple[float, ...] = _CODE_SIDECAR_READINESS_INTERVALS_SECONDS,
+) -> None:
+    if not _should_start_code_sidecar(configuration):
+        return
+
+    if network_name is None or code_sidecar_container_name is None:
+        raise RuntimeError("Code sidecar readiness check requires an internal network.")
+
+    phase = _run_code_sidecar_readiness_phase(
+        configuration,
+        network_name,
+        intervals_seconds,
+    )
+    result = {
+        "container_name": code_sidecar_container_name,
+        "health_url": f"http://{_CODE_SIDECAR_ALIAS}:{_CODE_SIDECAR_PORT}/health",
+        "ready": bool(phase["success"]),
+        "phases": [phase],
+    }
+    _write_code_sidecar_readiness_results(run_directory, result)
+    if not result["ready"]:
+        raise RuntimeError("Code sidecar did not become ready.")
+
+
+def _run_code_sidecar_readiness_phase(
+    configuration: DockerConfiguration,
+    network_name: str,
+    intervals_seconds: tuple[float, ...],
+) -> dict[str, object]:
+    attempts = []
+    for attempt_index, interval_seconds in enumerate(intervals_seconds, start=1):
+        if interval_seconds > 0:
+            time.sleep(interval_seconds)
+
+        command = _build_code_sidecar_health_probe_command(
+            configuration,
+            network_name,
+        )
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        success = completed.returncode == 0
+        attempts.append(
+            {
+                "attempt": attempt_index,
+                "wait_seconds": interval_seconds,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "success": success,
+            }
+        )
+        if success:
+            break
+
+    return {
+        "name": "health",
+        "success": bool(attempts and attempts[-1]["success"]),
+        "attempts": attempts,
+    }
+
+
+def _build_code_sidecar_health_probe_command(
+    configuration: DockerConfiguration,
+    network_name: str,
+) -> list[str]:
+    return [
+        _DOCKER_EXECUTABLE,
+        "run",
+        "--rm",
+        "--network",
+        network_name,
+        configuration.profile.image_name,
+        "python",
+        "-c",
+        _build_code_sidecar_health_probe_script(),
+    ]
+
+
+def _build_code_sidecar_health_probe_script() -> str:
+    health_url = f"http://{_CODE_SIDECAR_ALIAS}:{_CODE_SIDECAR_PORT}/health"
+    return (
+        "import json\n"
+        "from urllib.request import urlopen\n"
+        f"with urlopen({health_url!r}, timeout=5) as response:\n"
+        "    status = response.status\n"
+        "    body = response.read()\n"
+        "if status < 200 or status >= 300:\n"
+        "    raise SystemExit(status)\n"
+        "data = json.loads(body.decode('utf-8'))\n"
+        "if data.get('status') != 'ok':\n"
+        "    raise SystemExit(1)\n"
+        "print('ready')\n"
+    )
+
+
+def _write_code_sidecar_readiness_results(
+    run_directory: Path,
+    result: dict[str, object],
+) -> None:
+    results_path = run_directory / _CODE_SIDECAR_READINESS_RESULTS_FILE_NAME
+    results_text = json.dumps(result, indent=2)
+    results_path.write_text(f"{results_text}\n", encoding="utf-8")
 
 
 def _build_code_sidecar_image_inspect_command() -> list[str]:
@@ -1825,6 +2087,111 @@ def _start_haproxy_sidecar(
     return [run_command, network_connect_command]
 
 
+def _wait_for_haproxy_sidecar_ready(
+    configuration: DockerConfiguration,
+    run_directory: Path,
+    haproxy_sidecar_container_name: str | None,
+    intervals_seconds: tuple[float, ...] = _HAPROXY_READINESS_INTERVALS_SECONDS,
+) -> None:
+    if not _should_start_haproxy_sidecar(configuration):
+        return
+
+    if haproxy_sidecar_container_name is None:
+        raise RuntimeError("HAProxy sidecar readiness check requires a container.")
+
+    process_phase = _run_haproxy_sidecar_readiness_phase(
+        "process",
+        _build_haproxy_sidecar_process_probe_command(haproxy_sidecar_container_name),
+        intervals_seconds,
+    )
+    phases = [process_phase]
+    if bool(process_phase["success"]):
+        phases.append(
+            _run_haproxy_sidecar_readiness_phase(
+                "configuration",
+                _build_haproxy_sidecar_config_probe_command(
+                    haproxy_sidecar_container_name,
+                ),
+                intervals_seconds,
+            )
+        )
+
+    ready = all(bool(phase["success"]) for phase in phases)
+    result = {
+        "container_name": haproxy_sidecar_container_name,
+        "configuration_path": _HAPROXY_CONFIGURATION_PATH,
+        "ready": ready,
+        "phases": phases,
+    }
+    _write_haproxy_sidecar_readiness_results(run_directory, result)
+    if not ready:
+        raise RuntimeError("HAProxy sidecar did not become ready.")
+
+
+def _run_haproxy_sidecar_readiness_phase(
+    phase_name: str,
+    command: list[str],
+    intervals_seconds: tuple[float, ...],
+) -> dict[str, object]:
+    attempts = []
+    for attempt_index, interval_seconds in enumerate(intervals_seconds, start=1):
+        if interval_seconds > 0:
+            time.sleep(interval_seconds)
+
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        success = completed.returncode == 0
+        attempts.append(
+            {
+                "attempt": attempt_index,
+                "wait_seconds": interval_seconds,
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "success": success,
+            }
+        )
+        if success:
+            break
+
+    return {
+        "name": phase_name,
+        "success": bool(attempts and attempts[-1]["success"]),
+        "attempts": attempts,
+    }
+
+
+def _build_haproxy_sidecar_process_probe_command(
+    haproxy_sidecar_container_name: str,
+) -> list[str]:
+    return [
+        _DOCKER_EXECUTABLE,
+        "exec",
+        haproxy_sidecar_container_name,
+        "pidof",
+        "haproxy",
+    ]
+
+
+def _build_haproxy_sidecar_config_probe_command(
+    haproxy_sidecar_container_name: str,
+) -> list[str]:
+    return [
+        _DOCKER_EXECUTABLE,
+        "exec",
+        haproxy_sidecar_container_name,
+        "haproxy",
+        "-c",
+        "-f",
+        _HAPROXY_CONFIGURATION_PATH,
+    ]
+
+
 def _build_haproxy_sidecar_run_command(
     run_directory: Path,
     haproxy_sidecar_container_name: str,
@@ -1870,6 +2237,15 @@ def _write_haproxy_sidecar_start_results(
 ) -> None:
     results_path = run_directory / _HAPROXY_SIDECAR_START_RESULTS_FILE_NAME
     results_text = json.dumps(results, indent=2)
+    results_path.write_text(f"{results_text}\n", encoding="utf-8")
+
+
+def _write_haproxy_sidecar_readiness_results(
+    run_directory: Path,
+    result: dict[str, object],
+) -> None:
+    results_path = run_directory / _HAPROXY_SIDECAR_READINESS_RESULTS_FILE_NAME
+    results_text = json.dumps(result, indent=2)
     results_path.write_text(f"{results_text}\n", encoding="utf-8")
 
 
@@ -2772,12 +3148,6 @@ def _build_container_environment(
         container_environment[_OLLAMA_MODEL_ENVIRONMENT_VARIABLE] = (
             configuration.ollama_models[0]
         )
-        container_environment[_OPENAI_BASE_URL_ENVIRONMENT_VARIABLE] = (
-            f"{ollama_base_url}/v1"
-        )
-        container_environment[_OPENAI_API_KEY_ENVIRONMENT_VARIABLE] = (
-            _OLLAMA_OPENAI_API_KEY
-        )
     _remove_agent_database_environment(container_environment)
     return container_environment
 
@@ -2810,8 +3180,6 @@ def _build_effective_local_environment_variable_names(
     local_environment_variable_names: Set[str],
 ) -> Set[str]:
     names = set(local_environment_variable_names)
-    if _should_start_ollama_sidecar(configuration):
-        names.discard(_OPENAI_API_KEY_ENVIRONMENT_VARIABLE)
     names.difference_update(
         {
             _MARIADB_HOST_ENVIRONMENT_VARIABLE,

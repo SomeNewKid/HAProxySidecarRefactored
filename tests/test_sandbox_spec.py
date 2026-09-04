@@ -238,8 +238,8 @@ def test_mcp_sidecar_exposure_supports_tools_and_resources(
     }
 
 
-def test_default_sandbox_spec_exposes_active_items_tool() -> None:
-    """Verify the default sandbox spec exposes the MariaDB MCP tool."""
+def test_default_sandbox_spec_exposes_sidecar_tools() -> None:
+    """Verify the default sandbox spec exposes the configured sidecar tools."""
     spec_path = Path("src") / "sandbox_agent" / "sandbox_spec.toml"
 
     spec = load_sandbox_spec(spec_path)
@@ -247,6 +247,8 @@ def test_default_sandbox_spec_exposes_active_items_tool() -> None:
     assert spec.mcp_sidecar_tools == (
         "get_html_element_name",
         "get_active_items",
+        "jina_read_url",
+        "run_python_script",
     )
 
 

@@ -3,11 +3,16 @@ capabilities = [
   "network",
   "mcp_client",
   "openai_agents",
+  "jina_reader",
+  "code_execution",
   "haproxy",
+  "ollama",
 ]
 
 [squid_proxy]
-allowed_domains = []
+allowed_domains = [
+  ".example.com"
+]
 allowed_ip_addresses = []
 
 [haproxy]
@@ -15,9 +20,16 @@ ports = [
   3306,
 ]
 
+[ollama_sidecar]
+models = [
+  "qwen3:4b",
+]
+
 [mcp_sidecar]
 tools = [
   "get_html_element_name",
   "get_active_items",
+  "jina_read_url",
+  "run_python_script",
 ]
 resources = []

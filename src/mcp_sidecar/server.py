@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from .resources import ANSWER_FORMAT_RESOURCE_URI, get_answer_format
 from .tools import (
@@ -29,6 +31,7 @@ _SERVER_INSTRUCTIONS = (
     "for the sandboxed AI agent."
 )
 _EXPOSURE_PATH_ENVIRONMENT_VARIABLE = "MCP_SIDECAR_EXPOSURE_PATH"
+_HEALTH_ROUTE_PATH = "/health"
 
 
 @dataclass(frozen=True)
@@ -163,7 +166,15 @@ def create_mcp_server(
     )
     _register_tools(server, exposure[0])
     _register_resources(server, exposure[1])
+    _register_health_route(server)
     return server
+
+
+def _register_health_route(server: FastMCP) -> None:
+    @server.custom_route(_HEALTH_ROUTE_PATH, methods=["GET"], include_in_schema=False)
+    async def health_check(request: Request) -> Response:
+        _ = request
+        return JSONResponse({"status": "ok"})
 
 
 def _resolve_exposure(
